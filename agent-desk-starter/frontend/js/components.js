@@ -1,0 +1,453 @@
+// frontend/js/components.js
+(function () {
+  const { useState, useEffect } = React;
+  const h = React.createElement;
+  const API = () => window.AgentDeskAPI; // read lazily so load order only matters at call time, not parse time
+
+  // ---------------------------------------------------------------- icons --
+  const ICONS = {
+    roster:    ["M4 5h6v6H4z", "M14 5h6v6h-6z", "M4 13h6v6H4z", "M14 13h6v6h-6z"],
+    agent:     ["M12 12a4 4 0 100-8 4 4 0 000 8z", "M4 20c0-3.5 3.5-6 8-6s8 2.5 8 6"],
+    stream:    ["M3 8h13", "M12 4l4 4-4 4", "M21 16H8", "M12 20l-4-4 4-4"],
+    board:     ["M4 6h16", "M4 12h10", "M4 18h7", "M16.5 16.5l1.8 1.8L22 14"],
+    memory:    ["M4 6c0-1.4 3.6-2.5 8-2.5s8 1.1 8 2.5-3.6 2.5-8 2.5S4 7.4 4 6z", "M4 6v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5V6", "M4 12v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"],
+    approvals: ["M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z", "M9 12l2 2 4-4"],
+    play:      ["M6 4l14 8-14 8V4z"],
+    chevron:   ["M15 5l-7 7 7 7"],
+  };
+  function Icon({ name, size = 18 }) {
+    return h("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
+      (ICONS[name] || []).map((d, i) => h("path", { d, key: i })));
+  }
+
+  // ------------------------------------------------------------- helpers --
+  function renderTokens(tokens) {
+    return tokens.map((t, i) => (t.cls ? h("span", { className: t.cls, key: i }, t.text) : t.text));
+  }
+
+  function StatusDot({ live }) { return h("span", { className: `live-dot${live ? " live" : ""}` }); }
+
+  function ViewHeader({ title, description, live }) {
+    return h("div", { className: "view-header" },
+      h("div", { className: "view-header-row" },
+        h("h1", null, title),
+        h("span", { className: "conn-status" }, h(StatusDot, { live }), live ? "Live" : "Offline")
+      ),
+      h("p", null, description));
+  }
+
+  function EmptyState({ children }) { return h("div", { className: "empty-state" }, children); }
+
+  function SeatMonogram({ seat, size = 36 }) {
+    return h("div", { className: "monogram", style: { background: seat.color, width: size, height: size, fontSize: Math.round(size * 0.36) } }, seat.initials);
+  }
+
+  // -------------------------------------------------------------- sidebar --
+  const NAV = [
+    { id: "roster",    label: "Roster",       shortLabel: "Roster",   icon: "roster" },
+    { id: "agent",     label: "Agent page",   shortLabel: "Agent",    icon: "agent" },
+    { id: "stream",    label: "A2A stream",   shortLabel: "A2A",      icon: "stream" },
+    { id: "board",     label: "Board",        shortLabel: "Board",    icon: "board" },
+    { id: "memory",    label: "Memory panel", shortLabel: "Memory",   icon: "memory" },
+    { id: "approvals", label: "Approvals",    shortLabel: "Approve",  icon: "approvals" },
+  ];
+
+  function readStoredCollapse() {
+    try { return window.localStorage.getItem("agentDeskSidebarCollapsed") === "1"; } catch (e) { return false; }
+  }
+  function storeCollapse(v) {
+    try { window.localStorage.setItem("agentDeskSidebarCollapsed", v ? "1" : "0"); } catch (e) { /* ignore — not critical */ }
+  }
+
+  //  1. `.sidebar`          — desktop/tablet, collapsible to icon-only
+  //  2. `.mobile-header`     — phone only: brand + a compact Run demo
+  //  3. `.mobile-bottom-nav` — phone only: a real tab bar, o
+  function Sidebar({ view, setView, pendingCount, onRunDemo, running }) {
+    const [collapsed, setCollapsed] = useState(readStoredCollapse);
+    const toggle = () => { const next = !collapsed; setCollapsed(next); storeCollapse(next); };
+
+    return h(React.Fragment, null,
+      h("aside", { className: `sidebar${collapsed ? " collapsed" : ""}` },
+        h("div", { className: "brand" },
+          h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p"),
+          !collapsed && h("div", { className: "brand-sub" }, "Agent Desk")),
+        h("button", {
+          className: "run-demo-btn", onClick: onRunDemo, disabled: running,
+          title: running ? "Running\u2026" : "Run demo", "aria-label": "Run demo",
+        },
+          h(Icon, { name: "play", size: 14 }), !collapsed && (running ? "Running\u2026" : "Run demo")),
+        h("nav", { className: "side-nav" },
+          NAV.map((n) => h("button", {
+            key: n.id, className: `nav-item${view === n.id ? " active" : ""}`, onClick: () => setView(n.id),
+            title: n.label, "aria-label": n.label,
+          },
+            h(Icon, { name: n.icon, size: 17 }),
+            !collapsed && h("span", { className: "nav-label" }, n.label),
+            n.id === "approvals" && pendingCount > 0 && h("span", { className: "count" }, pendingCount)))),
+        !collapsed && h("div", { className: `attention-block${pendingCount > 0 ? " has-items" : ""}` },
+          h("div", { className: "attention-title" }, pendingCount > 0 ? `${pendingCount} need${pendingCount === 1 ? "s" : ""} you` : "All clear"),
+          h("div", { className: "attention-sub" }, pendingCount > 0 ? "Pending approvals & document requests" : "No pending approvals right now")),
+        h("button", {
+          className: "sidebar-toggle", onClick: toggle,
+          title: collapsed ? "Expand sidebar" : "Collapse sidebar", "aria-label": collapsed ? "Expand sidebar" : "Collapse sidebar",
+        },
+          h(Icon, { name: "chevron", size: 15 }),
+          !collapsed && h("span", null, "Collapse"))),
+
+      h("header", { className: "mobile-header" },
+        h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p"),
+        h("button", {
+          className: "run-demo-btn compact", onClick: onRunDemo, disabled: running,
+          "aria-label": "Run demo",
+        }, h(Icon, { name: "play", size: 13 }), running ? "Running\u2026" : "Run demo")),
+
+      h("nav", { className: "mobile-bottom-nav" },
+        NAV.map((n) => h("button", {
+          key: n.id, className: `mobile-nav-item${view === n.id ? " active" : ""}`, onClick: () => setView(n.id),
+          "aria-label": n.label,
+        },
+          h("span", { className: "mobile-nav-icon" },
+            h(Icon, { name: n.icon, size: 19 }),
+            n.id === "approvals" && pendingCount > 0 && h("span", { className: "count dot-count" }, pendingCount)),
+          h("span", { className: "mobile-nav-label" }, n.shortLabel)))));
+  }
+
+  // --------------------------------------------------------------- roster --
+  function Roster({ onSelectSeat }) {
+    const { SEATS } = API();
+    return h("div", { className: "seat-grid" },
+      SEATS.map((s) => h("button", { key: s.id, className: "seat-tile", onClick: () => onSelectSeat(s.id) },
+        h(SeatMonogram, { seat: s }),
+        h("h3", null, s.name),
+        h("p", { className: "role" }, s.role),
+        h("span", { className: "location-badge" }, s.location === "client_side" ? "runs at the client" : "runs at the studio"))));
+  }
+
+  // ------------------------------------------------------- live runtime --
+  function LiveRuntimePanel({ clientId }) {
+    const { getRuntimeStatus } = API();
+    const [status, setStatus] = useState(null);
+    useEffect(() => {
+      let cancelled = false;
+      const refresh = () => getRuntimeStatus(clientId).then((s) => { if (!cancelled) setStatus(s); }).catch(() => {});
+      refresh();
+      const id = setInterval(refresh, 2000);
+      return () => { cancelled = true; clearInterval(id); };
+    }, [clientId]);
+
+    return h("div", { className: "panel stacked-panel" },
+      h("h3", { className: "panel-title" }, "Live runtime \u2014 ", h("span", { className: "panel-subtitle" }, clientId)),
+      status
+        ? h("div", { className: "runtime-stats" },
+            h("div", { className: "runtime-stat" }, h("b", null, status.gates), " pending approval(s)"),
+            h("div", { className: "runtime-stat" }, h("b", null, status.docReqs), " open document request(s)"),
+            h("div", { className: "runtime-stat" }, h("b", null, status.questions), " open question(s) to the studio"))
+        : h(EmptyState, null, "Loading\u2026"));
+  }
+
+  // ------------------------------------------------------------ skill sandbox --
+  // Exercises the 7 skills directly, with a client-specific on/off list
+  function SkillSandbox({ clientId }) {
+    const { SKILL_TEST_CONFIG, testSkill, tokenizeJSON } = API();
+    const ALL = SKILL_TEST_CONFIG.map((s) => s.id);
+    const [enabled, setEnabled] = useState(ALL); // default: all on, matching the real seat's default manifest
+    const [activeSkill, setActiveSkill] = useState(ALL[0]);
+    const [fieldValues, setFieldValues] = useState({});
+    const [busy, setBusy] = useState(false);
+    const [result, setResult] = useState(null);
+    const [error, setError] = useState(null);
+
+    const config = SKILL_TEST_CONFIG.find((s) => s.id === activeSkill);
+    const toggle = (id) => setEnabled((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
+    const setField = (key, value) => setFieldValues((prev) => ({ ...prev, [key]: value }));
+
+    const run = async () => {
+      setBusy(true); setError(null); setResult(null);
+      try {
+        const args = {};
+        (config.fields || []).forEach((f) => { args[f.key] = fieldValues[f.key] ?? f.default; });
+        setResult(await testSkill(activeSkill, clientId, enabled, args));
+      } catch (e) { setError(String((e && e.message) || e)); }
+      finally { setBusy(false); }
+    };
+
+    return h("div", { className: "panel stacked-panel" },
+      h("h3", { className: "panel-title" }, "Skill sandbox ", h("span", { className: "panel-subtitle" }, "the 7 skills, switched on per client")),
+      h("p", { className: "hint" }, "Each skill checks manifest.skills before doing anything. Switch one off below, then run it \u2014 it should come back skipped rather than running anyway."),
+      h("div", { className: "skill-toggle-grid" },
+        SKILL_TEST_CONFIG.map((s) => h("label", { key: s.id, className: "checkbox-label" },
+          h("input", { type: "checkbox", checked: enabled.includes(s.id), onChange: () => toggle(s.id) }),
+          s.label))),
+      h("div", { className: "pack-tester-row" },
+        h("label", { className: "field-label-inline" }, "Skill to run",
+          h("select", { className: "text-input", value: activeSkill, onChange: (e) => { setActiveSkill(e.target.value); setResult(null); setError(null); } },
+            SKILL_TEST_CONFIG.map((s) => h("option", { key: s.id, value: s.id }, s.label)))),
+        (config.fields || []).map((f) => h("label", { key: f.key, className: "field-label-inline" }, f.label,
+          h("input", { className: "text-input", value: fieldValues[f.key] ?? f.default, onChange: (e) => setField(f.key, e.target.value) }))),
+        h("button", { className: "btn-primary", onClick: run, disabled: busy }, busy ? "Running\u2026" : "Run skill")),
+      !enabled.includes(activeSkill) && h("div", { className: "error-banner" }, `"${config.label}" is switched OFF above \u2014 running it now should come back skipped, not do anything.`),
+      error && h("div", { className: "error-banner" }, error),
+      result && h("pre", { className: "code-block" }, renderTokens(tokenizeJSON(result))));
+  }
+
+  // ------------------------------------------------------- pack delivery --
+  // Manual trigger for L'Amministrativo's proactive deliverMonthlyPack() 
+  function PackDeliveryTester({ clientId, period, onPeriodChange }) {
+    const { deliverPack, tokenizeJSON } = API();
+    const [busy, setBusy] = useState(false);
+    const [result, setResult] = useState(null);
+    const [error, setError] = useState(null);
+
+    const run = async () => {
+      setBusy(true); setError(null); setResult(null);
+      try { setResult(await deliverPack(clientId, period)); }
+      catch (e) { setError(String((e && e.message) || e)); }
+      finally { setBusy(false); }
+    };
+
+    return h("div", { className: "panel" },
+      h("h3", { className: "panel-title" }, "Test: deliver the monthly pack ",
+        h("span", { className: "panel-subtitle" }, "proactive \u2014 not triggered by a studio request")),
+      h("p", { className: "hint" }, "Calls the seat\u2019s own deliverMonthlyPack() directly, the same way a real schedule trigger would. Summarises whatever this client/period already has recorded \u2014 documents found, still-open requests, still-open questions \u2014 into a single pack_delivered message."),
+      h("div", { className: "pack-tester-row" },
+        h("label", { className: "field-label-inline" }, "Period",
+          h("input", { className: "text-input", value: period, onChange: (e) => onPeriodChange(e.target.value) })),
+        h("button", { className: "btn-primary", onClick: run, disabled: busy }, busy ? "Delivering\u2026" : "Deliver now")),
+      error && h("div", { className: "error-banner" }, error),
+      result && h("div", null,
+        h("div", { className: "success-banner" },
+          `\u2713 pack_delivered sent \u2014 ${result.pack.docs.length} doc(s), ${result.pack.missing.length} missing, ${result.pack.questions.length} open question(s)`),
+        h("pre", { className: "code-block" }, renderTokens(tokenizeJSON(result.pack)))));
+  }
+
+  // ------------------------------------------------------------ agent page --
+  function AgentPage({ initialSeat, onSeatChange }) {
+    const { SEATS, compileSeat, tokenizeJSON } = API();
+    const [seat, setSeat] = useState(initialSeat || "l_amministrativo");
+    const [jobText, setJobText] = useState("");
+    const [out, setOut] = useState(null);
+    const [error, setError] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [tab, setTab] = useState("manifest");
+    const [packClientId, setPackClientId] = useState("rossi_srl");
+    const [packPeriod, setPackPeriod] = useState("2026-Q3");
+
+    useEffect(() => { setSeat(initialSeat || "l_amministrativo"); }, [initialSeat]);
+    useEffect(() => { setOut(null); setError(null); }, [seat]);
+
+    const pick = (id) => { setSeat(id); onSeatChange && onSeatChange(id); };
+    const compile = async () => {
+      setBusy(true); setError(null);
+      try { setOut(await compileSeat(seat, jobText)); }
+      catch (e) { setError(String((e && e.message) || e)); }
+      finally { setBusy(false); }
+    };
+
+    return h(React.Fragment, null,
+      h("div", { className: "agent-layout" },
+        h("div", { className: "panel" },
+          h("div", { className: "seat-list" },
+            SEATS.map((s) => h("div", {
+              key: s.id, className: `seat-list-item${seat === s.id ? " active" : ""}`, onClick: () => pick(s.id),
+            }, h(SeatMonogram, { seat: s, size: 26 }), h("span", null, s.name)))),
+          h("label", { className: "field-label" }, "Job description (Italian)"),
+          h("textarea", {
+            className: "job-input",
+            placeholder: "es. Recupera i documenti mancanti per il periodo; se non li trovi, chiedi al titolare su WhatsApp\u2026",
+            value: jobText, onChange: (e) => setJobText(e.target.value),
+          }),
+          h("p", { className: "hint" }, "Leave blank to compile the seat\u2019s real job description on file. The NL\u2192manifest step itself is still mocked \u2014 the manifest stays the pre-written one \u2014 but the text here drives the compiled skill doc below."),
+          h("button", { className: "btn-primary", onClick: compile, disabled: busy }, busy ? "Compiling\u2026" : "Compile")),
+        h("div", { className: "panel" },
+          error && h("div", { className: "error-banner" }, error),
+          !error && !out && h(EmptyState, null, "Pick a seat and compile to see its manifest and generated skill here."),
+          out && h("div", null,
+            out.usedCustomJobText && h("div", { className: "success-banner" }, "\u2713 Compiled using the text you wrote"),
+            h("div", { className: "segmented" },
+              h("button", { className: tab === "manifest" ? "active" : "", onClick: () => setTab("manifest") }, "Manifest"),
+              h("button", { className: tab === "skill" ? "active" : "", onClick: () => setTab("skill") }, "Compiled skill")),
+            tab === "manifest"
+              ? h("pre", { className: "code-block" }, renderTokens(tokenizeJSON(out.manifest)))
+              : h("pre", { className: "code-block plain" }, out.skill)))),
+      seat === "l_amministrativo" && h(React.Fragment, null,
+        h("div", { className: "panel client-selector" },
+          h("label", { className: "field-label-inline" }, "Testing as client",
+            h("input", { className: "text-input", value: packClientId, onChange: (e) => setPackClientId(e.target.value) })),
+          h("p", { className: "hint" }, "The live runtime, skill sandbox and pack-delivery tester below all act on this client id.")),
+        h(LiveRuntimePanel, { clientId: packClientId }),
+        h(SkillSandbox, { clientId: packClientId }),
+        h(PackDeliveryTester, { clientId: packClientId, period: packPeriod, onPeriodChange: setPackPeriod })));
+  }
+
+  // ------------------------------------------------------------ a2a stream --
+  function A2AStream({ messages }) {
+    const { A2A_TYPE_META, AGENT_COLOR, tokenizeJSON, timeAgo, useNowTick } = API();
+    useNowTick();
+    const [openId, setOpenId] = useState(null);
+    const [typeFilter, setTypeFilter] = useState("all");
+    const [onlyLA, setOnlyLA] = useState(false);
+
+    const types = Object.keys(A2A_TYPE_META);
+    const filtered = messages.filter((e) => {
+      const m = e.message;
+      if (typeFilter !== "all" && m.type !== typeFilter) return false;
+      if (onlyLA && m.from !== "l_amministrativo" && m.to !== "l_amministrativo") return false;
+      return true;
+    });
+
+    return h("div", null,
+      h("div", { className: "stream-filters" },
+        h("select", { className: "text-input", value: typeFilter, onChange: (e) => setTypeFilter(e.target.value) },
+          h("option", { value: "all" }, `All types (${messages.length})`),
+          types.map((t) => h("option", { key: t, value: t }, A2A_TYPE_META[t].label))),
+        h("label", { className: "checkbox-label" },
+          h("input", { type: "checkbox", checked: onlyLA, onChange: (e) => setOnlyLA(e.target.checked) }),
+          "Only L'Amministrativo")),
+      filtered.length === 0
+        ? h(EmptyState, null, messages.length === 0 ? "No messages yet \u2014 run the demo to see typed, signed A2A traffic." : "No messages match this filter.")
+        : h("div", { className: "panel" },
+            filtered.map((e, i) => {
+              const m = e.message;
+              const meta = A2A_TYPE_META[m.type] || { label: m.type, bg: "#F6F8FC", fg: "#5B6B85" };
+              const open = openId === i;
+              return h("div", { className: "msg-row", key: i },
+                h("div", { className: "msg-parties" },
+                  h("span", { style: { color: AGENT_COLOR[m.from] || "#101A2B" } }, m.from), " \u2192 ",
+                  h("span", { style: { color: AGENT_COLOR[m.to] || "#101A2B" } }, m.to),
+                  h("div", { className: "row-timestamp" }, timeAgo(e.at))),
+                h("div", { className: "msg-body" },
+                  h("span", { className: "msg-type-pill", style: { background: meta.bg, color: meta.fg } }, meta.label),
+                  h("button", { className: "msg-payload-toggle", onClick: () => setOpenId(open ? null : i) }, open ? "hide payload" : "show payload"),
+                  open && h("pre", { className: "msg-payload" }, renderTokens(tokenizeJSON(m)))));
+            })));
+  }
+
+  // ----------------------------------------------------------------- board --
+  function Board({ board, feed }) {
+    const { AGENT_COLOR, timeAgo, useNowTick } = API();
+    useNowTick();
+    if (board.length === 0) return h(EmptyState, null, "Run the demo to watch the pre-filing validation flow step through.");
+    return h("div", { className: "board-layout" },
+      h("div", { className: "panel" },
+        h("h3", { className: "panel-title" }, "Steps"),
+        h("div", { className: "stepper" },
+          board.map((e, i) => h("div", { className: `step${i < board.length - 1 ? " done" : ""}`, key: i },
+            h("div", { className: "label" }, e.label),
+            h("div", { className: "row-timestamp" }, timeAgo(e.at)))))),
+      h("div", { className: "panel" },
+        h("h3", { className: "panel-title" }, "Live feed"),
+        feed.length === 0 ? h(EmptyState, null, "No agent activity yet.") :
+          feed.map((e, i) => h("div", { className: `feed-row ${e.tone || ""}`, key: i },
+            h("span", { className: "agent-dot", style: { background: AGENT_COLOR[e.agent] || "#93A1B8" } }),
+            h("span", { className: "agent-name" }, e.agent),
+            h("span", { className: "text" }, e.text),
+            h("span", { className: "row-timestamp" }, timeAgo(e.at))))));
+  }
+
+  // ---------------------------------------------------------------- memory --
+  function Memory({ evidence, knowledge, coa }) {
+    if (evidence.length === 0 && knowledge.length === 0 && coa.length === 0) {
+      return h(EmptyState, null, "Nothing recorded yet \u2014 run the demo to populate the evidence and knowledge stores.");
+    }
+
+    const packs = evidence.filter((e) => e.record.kind === "monthly_pack");
+    const generalEvidence = evidence.filter((e) => e.record.kind !== "monthly_pack");
+    const clientMemory = knowledge.filter((e) => e.record.key && e.record.key.startsWith("client:"));
+    const sharedMemory = knowledge.filter((e) => !e.record.key || !e.record.key.startsWith("client:"));
+
+    return h("div", { className: "memory-grid" },
+      h("div", { className: "panel" },
+        packs.length > 0 && h("div", { className: "sub-block", style: { marginTop: 0, paddingTop: 0, borderTop: "none" } },
+          h("h4", { className: "panel-subtitle" }, "Delivered packs ", h("span", null, "\u2014 L'Amministrativo's pack_delivered runs")),
+          packs.map((e, i) => h("div", { className: "ledger-row pack-row", key: "p" + i },
+            h("div", null, h("b", null, `${e.record.clientId} \u00b7 ${e.record.period}`)),
+            h("div", { className: "payload-line" },
+              `${e.record.pack.docs.length} doc(s) \u00b7 ${e.record.pack.missing.length} missing \u00b7 ${e.record.pack.questions.length} open question(s)`)))),
+        h("h3", { className: "panel-title" }, "Evidence store ", h("span", { className: "panel-subtitle" }, "immutable, append-only")),
+        generalEvidence.length === 0 ? h(EmptyState, null, "No other evidence recorded yet.") :
+          generalEvidence.map((e, i) => h("div", { className: "ledger-row", key: i }, h("span", { className: "hash" }, `${e.record.id} \u00b7 ${e.record.hash}  `), JSON.stringify(e.record))),
+        coa.length > 0 && h("div", { className: "sub-block" },
+          h("h4", { className: "panel-subtitle" }, "Chart-of-accounts proposals"),
+          coa.map((e, i) => h("div", { className: "ledger-row", key: "c" + i }, `${e.supplier} \u2192 ${e.account} @ ${e.confidence}`)))),
+      h("div", { className: "panel" },
+        h("h3", { className: "panel-title" }, "L'Amministrativo \u2014 client memory ", h("span", { className: "panel-subtitle" }, "own client's L3 mirror only")),
+        clientMemory.length === 0 ? h(EmptyState, null, "No client-scoped facts recorded yet.") :
+          clientMemory.map((e, i) => h("div", { className: "ledger-row", key: "cm" + i },
+            h("div", null, `${e.record.key.split(":").slice(2).join(":")} \u2192 ${JSON.stringify(e.record.value).slice(0, 140)}`),
+            h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })))),
+        h("div", { className: "sub-block" },
+          h("h4", { className: "panel-subtitle" }, "Shared knowledge ", h("span", null, "\u2014 other seats, not client-scoped")),
+          sharedMemory.length === 0 ? h(EmptyState, null, "No rules confirmed yet.") :
+            sharedMemory.map((e, i) => h("div", { className: "ledger-row", key: "sm" + i },
+              h("div", null, `${e.record.key} \u2192 ${JSON.stringify(e.record.value)}`),
+              h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })))))));
+  }
+
+  // ------------------------------------------------------------ approvals --
+  function Approvals({ ladderEvents }) {
+    const { getGates, approveGate, denyGate, getDocumentRequests, resolveDocumentRequest, getQuestions, resolveQuestion } = API();
+    const [gates, setGates] = useState([]);
+    const [docReqs, setDocReqs] = useState([]);
+    const [questions, setQuestions] = useState([]);
+    const refresh = () => { getGates().then(setGates); getDocumentRequests().then(setDocReqs); getQuestions().then(setQuestions); };
+    useEffect(() => { refresh(); const id = setInterval(refresh, 1500); return () => clearInterval(id); }, []);
+    useEffect(() => { refresh(); }, [ladderEvents.length]);
+
+    const ladderDots = (remindersSent, escalated) => h("div", { className: "ladder-dots" },
+      [0, 1].map((i) => h("span", { key: i, className: `dot${remindersSent > i ? " filled" : ""}` })),
+      h("span", { className: `dot${escalated ? " escalated" : ""}` }));
+
+    const onApprove = async (id) => { await approveGate(id, "owner_mario"); refresh(); };
+    const onDeny = async (id) => { await denyGate(id, "declined in demo"); refresh(); };
+    const onReceived = async (id) => { await resolveDocumentRequest(id, "IT" + Math.floor(Math.random() * 900 + 100)); refresh(); };
+    const onSimulateReply = async (id) => { await resolveQuestion(id); refresh(); }; // no answer/evidenceId -> server fills a plausible default, same spirit as "Mark received"
+
+    return h("div", null,
+      h("h3", { className: "section-title" }, "Owner approvals"),
+      gates.length === 0
+        ? h(EmptyState, null, "No pending approvals. Run the demo \u2014 L'Amministrativo drafts a demo invoice partway through.")
+        : gates.map((g) => h("div", { className: `approval-card${g.escalated ? " escalated" : ""}`, key: g.id },
+            h("div", { className: "approval-top" },
+              h("b", null, g.action), ladderDots(g.remindersSent, g.escalated),
+              g.escalated && h("span", { className: "pill-escalated" }, "escalated to Lo Smistatore")),
+            h("div", { className: "payload-line" }, JSON.stringify(g.payload)),
+            h("div", { className: "approval-actions" },
+              h("button", { className: "btn-approve", onClick: () => onApprove(g.id) }, "Approve"),
+              h("button", { className: "btn-deny", onClick: () => onDeny(g.id) }, "Deny")))),
+
+      h("h3", { className: "section-title" }, "Document requests"),
+      docReqs.length === 0
+        ? h(EmptyState, null, "No pending document requests right now.")
+        : docReqs.map((r) => h("div", { className: `approval-card${r.escalated ? " escalated" : ""}`, key: r.id },
+            h("div", { className: "approval-top" },
+              h("b", null, `${r.expected.docType} \u00b7 ${r.expected.supplier}`),
+              h("span", { className: "payload-line" }, r.expected.period),
+              ladderDots(r.remindersSent, r.escalated),
+              r.escalated && h("span", { className: "pill-escalated" }, "escalated to Lo Smistatore")),
+            h("div", { className: "approval-actions" },
+              h("button", { className: "btn-received", onClick: () => onReceived(r.id) }, "Mark received")))),
+
+      h("h3", { className: "section-title" }, "Open questions to the studio"),
+      h("p", { className: "hint" }, "domande_allo_studio \u2014 questions this seat has sent that the studio hasn't answered yet. No ladder here; only gates and document requests get reminded/escalated."),
+      questions.length === 0
+        ? h(EmptyState, null, "No open questions right now.")
+        : questions.map((q) => h("div", { className: "approval-card", key: q.id },
+            h("div", { className: "approval-top" }, h("b", null, q.topic)),
+            h("div", { className: "payload-line" }, q.body),
+            h("div", { className: "approval-actions" },
+              h("button", { className: "btn-received", onClick: () => onSimulateReply(q.id) }, "Simulate studio reply")))),
+
+      ladderEvents.length > 0 && h("div", null,
+        h("h3", { className: "section-title" }, "Ladder activity"),
+        h("div", { className: "panel" },
+          ladderEvents.slice(-8).reverse().map((e, i) => h("div", { className: "feed-row", key: i },
+            h("span", { className: "agent-dot", style: { background: e.event === "escalate" ? "#C0473C" : "#F08000" } }),
+            h("span", null, `${e.kind} ${e.event}`),
+            h("span", { className: "text" }, e.gateId || e.requestId))))));
+  }
+
+  window.AgentDeskComponents = {
+    Icon, StatusDot, ViewHeader, EmptyState, SeatMonogram, Sidebar,
+    Roster, AgentPage, A2AStream, Board, Memory, Approvals,
+  };
+})();
