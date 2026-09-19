@@ -29,6 +29,21 @@ export async function compile(seatId) {
   return { manifest, skill };
 }
 
+// Used by the frontend's "write the job in Italian" box. 
+// Real NL->manifest parsing is still a TODO — this still loads the pre-written
+// manifest for the seat, but emits the skill doc from the TEXT THE USER TYPED,
+// so the box is genuinely wired to something instead of a no-op textarea.
+// >>> TODO (real): replace with an edge-SLM/LLM call: jobText -> manifest JSON,
+//     validated by ManifestSchema, same as parseJobToManifest does today.
+export async function compileWithJobText(seatId, jobText) {
+  const manifest = validateManifest(await parseJobToManifest(seatId));
+  const skill = emitSkill(manifest, jobText || "");
+  const outDir = join(here, "..", "build", "skills");
+  await mkdir(outDir, { recursive: true });
+  await writeFile(join(outDir, `${seatId}.md`), skill, "utf8");
+  return { manifest, skill, usedCustomJobText: Boolean(jobText) };
+}
+
 export function emitSkill(m, job) {
   const block = (arr) => arr.map((x) => `- ${x}`).join("\n");
   return `# SOUL — ${m.seat}

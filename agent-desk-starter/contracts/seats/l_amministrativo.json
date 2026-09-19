@@ -6,6 +6,7 @@
   "tools": ["bankfeed.read","sdi.inbox","fattureincloud.draft","whatsapp.owner_employees","a2a.endpoint:lo_smistatore"],
   "memory": { "read": [0, 1], "write": [3], "partition": "mirror(client_L3, scoped)" },
   "refuses": ["tax_advice", "payments", "send_to_authority", "contact_studio_staff"],
+  "schedule": "periodic(monthly_pack) | event(document_request_resolved)",
   "gate": "owner_approval(invoice | external_send)",
   "artifact": "monthly_pack{docs, class+conf, missing, questions} signed+acked",
   "unit": { "resale": "margin", "chase_counterpart": "2TC" }
