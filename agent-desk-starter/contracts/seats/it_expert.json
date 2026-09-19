@@ -1,0 +1,19 @@
+{
+  "seat": "it_expert",
+  "desk": "integrazioni",
+  "location": "studio_edge",
+  "model": { "edge": "qwen3.5-4b", "fallback": "kimi" },
+  "tools": [
+    "connector.scaffold",
+    "connector.test",
+    "oauth.configure",
+    "mcp.register_server",
+    "a2a.endpoint:chief_of_staff"
+  ],
+  "memory": { "read": [0, 1, 2], "write": [2] },
+  "refuses": ["store_secrets_in_manifest", "disable_human_gate", "touch_client_data"],
+  "schedule": "event(connector_requested)",
+  "gate": "credential_change",
+  "artifact": "connector{name, scopes, auth, health}",
+  "unit": { "metering": "unmetered" }
+}

@@ -1,0 +1,18 @@
+{
+  "seat": "l_archivista",
+  "desk": "memoria",
+  "location": "studio_edge",
+  "model": { "edge": "qwen3.5-4b", "fallback": "kimi" },
+  "tools": [
+    "cortex.evidence_store",
+    "cortex.knowledge_store",
+    "rule.propose",
+    "a2a.endpoint:lo_smistatore"
+  ],
+  "memory": { "read": [0, 1, 2, 3], "write": [2, 3] },
+  "refuses": ["store_without_evidence", "auto_confirm_rule", "write_general_weights"],
+  "schedule": "event(resolution_confirmed)",
+  "gate": "rule_confirmation",
+  "artifact": "knowledge_object{scope, value, confidence, source, confirmer, last_verified}",
+  "unit": { "per_rule": "1TC" }
+}

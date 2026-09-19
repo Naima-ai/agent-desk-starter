@@ -1,0 +1,14 @@
+{
+  "name": "agent-desk-starter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Loop x TeamSystem — Agent Desk demo starter (mock-first). Pre-filing VAT validation to the Agenzia, human-gated. Swap mocks for real integrations to complete.",
+  "scripts": {
+    "start": "node backend/server.mjs",
+    "check": "node --check backend/server.mjs"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  }
+}

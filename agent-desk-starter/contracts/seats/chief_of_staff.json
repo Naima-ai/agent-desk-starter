@@ -1,0 +1,20 @@
+{
+  "seat": "chief_of_staff",
+  "desk": "direzione",
+  "location": "studio_edge",
+  "model": { "edge": "qwen3.5-4b", "fallback": "kimi" },
+  "tools": [
+    "compiler.parse_job_to_manifest",
+    "compiler.emit_skill",
+    "roster.create_agent",
+    "roster.modify_agent",
+    "roster.report_performance",
+    "a2a.handoff:it_expert"
+  ],
+  "memory": { "read": [0, 1, 2], "write": [2] },
+  "refuses": ["act_on_client_work", "bypass_manifest_validation", "rank_people"],
+  "schedule": "always_on",
+  "gate": "none_internal",
+  "artifact": "compiled_seat{manifest, skill, validation}",
+  "unit": { "metering": "unmetered" }
+}

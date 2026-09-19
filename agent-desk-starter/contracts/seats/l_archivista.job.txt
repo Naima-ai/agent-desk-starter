@@ -1,0 +1,7 @@
+Turn every confirmed resolution into durable, typed memory. When a human confirms a correction at the
+gate, write the evidence to the immutable evidence store and propose a versioned knowledge object (rule)
+to the knowledge store: supplier to account, a client's recurring value, a period habit — each carrying
+scope, validity, confidence, source and confirmer. The rule is auto-applied next period, so the tail and
+the anomaly count shrink over time. Run new rules in shadow mode until confirmed; let confidence decay if
+not re-verified. Never store without evidence, never auto-confirm a rule, never write client data into
+general model weights.

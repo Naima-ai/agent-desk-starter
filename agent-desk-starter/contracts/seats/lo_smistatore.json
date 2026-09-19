@@ -1,0 +1,12 @@
+{
+  "seat": "lo_smistatore",
+  "desk": "sportello",
+  "location": "studio_edge",
+  "model": { "edge": "qwen3.5-4b", "fallback": "kimi" },
+  "tools": ["a2a.endpoint:l_amministrativo", "board.create_task", "escalation.ladder"],
+  "memory": { "read": [2, 3], "write": [2] },
+  "refuses": ["answer_client_directly", "rank_people", "route_by_measured_behaviour"],
+  "gate": "none_internal",
+  "artifact": "routed_task{owner, deadline}",
+  "unit": { "metering": "unmetered" }
+}

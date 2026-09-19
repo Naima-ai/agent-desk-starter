@@ -1,0 +1,19 @@
+{
+  "seat": "l_addetto_iva",
+  "desk": "iva",
+  "location": "studio_edge",
+  "model": { "edge": "qwen3.5-4b", "fallback": "kimi" },
+  "tools": [
+    "teamsystem.read_vat_batch",
+    "ledger.prior_period_compare",
+    "batch.reassemble",
+    "a2a.handoff:lo_smistatore",
+    "ade.prepare_only"
+  ],
+  "memory": { "read": [0, 1, 2, 3], "write": [3] },
+  "refuses": ["transmit_to_authority", "sign_on_behalf_of_professional", "alter_ledger"],
+  "schedule": "event(vat_batch_ready) | periodic(lipe|f24)",
+  "gate": "transmission_to_ade",
+  "artifact": "validated_batch{period, tail[], anomalies[], evidence}",
+  "unit": { "per_batch": "40TC" }
+}

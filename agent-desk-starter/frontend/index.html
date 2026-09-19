@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Desk — demo starter</title>
+<style>
+  :root{ --blue:#0A63E0; --navy:#07234F; --orange:#F08000; --ink:#13223B; --muted:#5C6B80;
+         --card:#EEF3FC; --border:#D5E2F5; --green:#1F9D6B; }
+  *{box-sizing:border-box} body{margin:0;font-family:Arial,Helvetica,sans-serif;color:var(--ink);background:#fff}
+  header{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--border)}
+  header .logo{font-weight:800;font-size:20px;color:var(--blue)} header .logo span{color:var(--orange)}
+  header button{margin-left:auto;background:var(--orange);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer}
+  nav{display:flex;gap:6px;padding:10px 22px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+  nav a{padding:8px 14px;border-radius:8px;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer}
+  nav a.active{background:var(--card);color:var(--navy)}
+  main{padding:20px 22px;max-width:1100px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .card{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card)}
+  .card h3{margin:0 0 4px} .tag{font-size:12px;font-weight:700;color:var(--blue)}
+  .bubble{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin:8px 0;background:#fff}
+  .bubble .t{font-family:monospace;font-size:12px;color:var(--navy)}
+  .row{display:flex;gap:10px;align-items:center;border:1px solid var(--border);border-radius:10px;padding:10px;margin:6px 0;background:#fff}
+  .kv{font-family:monospace;font-size:12px;color:var(--navy)}
+  .good{color:var(--green);font-weight:700} .warn{color:var(--orange);font-weight:700}
+  textarea{width:100%;height:120px;font-family:monospace;font-size:12px;border:1px solid var(--border);border-radius:8px;padding:10px}
+  pre{background:var(--navy);color:#CFE0FA;padding:12px;border-radius:10px;overflow:auto;font-size:12px}
+  small{color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect } = React;
+const SEATS = ["chief_of_staff","it_expert","l_addetto_iva","il_classificatore","l_amministrativo","lo_smistatore","l_archivista"];
+
+function useBus(){
+  const [ev,setEv] = useState({a2a:[],feed:[],board:[],evidence:[],knowledge:[],coa:[]});
+  useEffect(()=>{
+    const es = new EventSource("/events");
+    es.onmessage = (m)=>{ const e = JSON.parse(m.data);
+      setEv(s=>({ ...s, [e.channel]: [ ...(s[e.channel]||[]), e ] })); };
+    return ()=> es.close();
+  },[]);
+  return ev;
+}
+
+function Roster(){ return (
+  <div className="grid">{SEATS.map(s=>(
+    <div className="card" key={s}><div className="tag">SEAT</div><h3>{s}</h3>
+      <small>face · icon · name · job description</small></div>))}
+  </div>); }
+
+function AgentPage(){
+  const [seat,setSeat]=useState("l_addetto_iva");
+  const [out,setOut]=useState(null);
+  const compile = async ()=>{ const r = await fetch("/api/compile/"+seat); setOut(await r.json()); };
+  return (<div>
+    <div className="row"><b>Agent:&nbsp;</b>
+      <select value={seat} onChange={e=>setSeat(e.target.value)}>{SEATS.map(s=><option key={s}>{s}</option>)}</select>
+      <button onClick={compile} style={{marginLeft:"auto"}}>Compile</button></div>
+    <p><small>Edit the job description in natural language, then compile to a validated manifest + OpenClaw skill.</small></p>
+    <textarea placeholder="Natural-language job description (the real one ships in contracts/seats/*.job.txt)"></textarea>
+    {out && out.manifest && <pre>{JSON.stringify(out.manifest,null,2)}</pre>}
+    {out && out.error && <p style={{color:"#C0473C"}}>{out.error}</p>}
+  </div>); }
+
+function A2AStream({ev}){ return (<div>{ev.a2a.length===0 && <small>Run the demo to see typed, signed messages.</small>}
+  {ev.a2a.map((e,i)=>{const m=e.message;return (<div className="bubble" key={i}>
+    <b>{m.from}</b> → <b>{m.to}</b> <span className="tag">{m.type}</span>
+    <div className="t">{JSON.stringify(m)}</div></div>);})}</div>); }
+
+function Board({ev}){ return (<div>{ev.board.map((e,i)=><div className="row" key={i}><b>{e.step}</b>&nbsp;{e.label}</div>)}
+  {ev.feed.map((e,i)=><div className="row" key={"f"+i}><span className="tag">{e.agent}</span>
+    <span className={e.tone==="good"?"good":(e.tone==="warn"?"warn":"")}>{e.text}</span></div>)}</div>); }
+
+function Memory({ev}){ return (<div>
+  <h3>Evidence store <small>(immutable)</small></h3>
+  {ev.evidence.map((e,i)=><div className="row" key={i}><span className="kv">{JSON.stringify(e.record)}</span></div>)}
+  <h3>Knowledge store <small>(typed, versioned)</small></h3>
+  {ev.knowledge.map((e,i)=><div className="row" key={i}><span className="kv good">{JSON.stringify(e.record)}</span></div>)}
+  {ev.coa.map((e,i)=><div className="row" key={"c"+i}><span className="kv">CoA proposal: {e.supplier} → {e.account} @ {e.confidence}</span></div>)}
+</div>); }
+
+function App(){
+  const ev = useBus();
+  const [tab,setTab]=useState("Roster");
+  const tabs = { Roster:<Roster/>, "Agent page":<AgentPage/>, "A2A stream":<A2AStream ev={ev}/>, Board:<Board ev={ev}/>, "Memory panel":<Memory ev={ev}/> };
+  return (<div>
+    <header><div className="logo">l∞p<span>.ai</span></div><b>Agent Desk — demo starter</b>
+      <button onClick={()=>fetch("/api/run-demo")}>▶ Run demo</button></header>
+    <nav>{Object.keys(tabs).map(t=><a key={t} className={t===tab?"active":""} onClick={()=>setTab(t)}>{t}</a>)}</nav>
+    <main>{tabs[tab]}</main>
+  </div>); }
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

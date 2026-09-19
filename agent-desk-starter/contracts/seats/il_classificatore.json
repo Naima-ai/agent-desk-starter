@@ -1,0 +1,18 @@
+{
+  "seat": "il_classificatore",
+  "desk": "contabilita",
+  "location": "studio_edge",
+  "model": { "edge": "qwen3.5-4b", "fallback": "kimi" },
+  "tools": [
+    "fattureincloud.read_document",
+    "coa.lookup",
+    "fattureincloud.post_line",
+    "a2a.handoff:il_riconciliatore"
+  ],
+  "memory": { "read": [1, 2, 3], "write": [3] },
+  "refuses": ["post_below_confidence", "alter_chart_conventions", "invent_accounts"],
+  "schedule": "event(document_received)",
+  "gate": "line_below_confidence_threshold",
+  "artifact": "classified_lines{account, confidence, evidence}",
+  "unit": { "per_100_lines": "35TC" }
+}
