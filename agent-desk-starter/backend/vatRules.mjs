@@ -22,7 +22,11 @@ const VALID_NATURA = [
   "N6.1", "N6.2", "N6.3", "N6.4", "N6.5", "N6.6", "N6.7", "N6.8", "N6.9",
   "N7",
 ];
-const LINE_TOLERANCE = 0.01; // CST-01 — €0.01 per line
+const LINE_TOLERANCE = 0.01; // CST-02 — €0.01 per line
+// NOTE: CST-01 ("line total = qty x unit price - discounts") is NOT checked here —
+// this starter kit's line shape only carries { net, vat }, not { qty, unitPrice,
+// discount }. Implementing CST-01 for real needs those fields added to the batch
+// model first; don't claim CST-01 coverage until that's true.
 
 /** The rate implied by a line's own net/vat amounts, as a percentage. */
 function impliedRate(line) {
@@ -100,8 +104,7 @@ export function checkRateCategoryMatch(line, taxonomy = []) {
   return null;
 }
 
-/** CST-01/CST-02 arithmetic coherence, adapted to the net/vat fields this
- *  starter kit carries: vat should equal net x rate, within tolerance. */
+/** CST-02 — "tax = base x rate; totals reconcile", within tolerance. */
 export function checkArithmetic(line) {
   const rate = impliedRate(line);
   if (rate === null) return null;
@@ -109,7 +112,7 @@ export function checkArithmetic(line) {
   const expectedVat = Math.round(line.net * (nearestValidRate / 100) * 100) / 100;
   if (Math.abs(expectedVat - line.vat) > LINE_TOLERANCE) {
     return {
-      ruleId: "CST-01", severity: "Major", kind: "arithmetic_mismatch", line: line.id,
+      ruleId: "CST-02", severity: "Major", kind: "arithmetic_mismatch", line: line.id,
       message: `VAT ${line.vat} does not reconcile with net ${line.net} x ${nearestValidRate}% (expected ~${expectedVat}).`,
     };
   }

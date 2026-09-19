@@ -58,10 +58,11 @@ test("SEM-01 accepts a valid sub-coded Natura", () => {
   assert.equal(checkNaturaSubcode(line), null);
 });
 
-test("CST-01 flags a line whose VAT doesn't reconcile with net x rate", () => {
+test("CST-02 flags a line whose VAT doesn't reconcile with net x rate", () => {
   const line = { id: "A1", supplier: "Cartoleria Sole", net: 100, vat: 50 }; // nowhere near a valid rate
   const hit = checkArithmetic(line);
   assert.ok(hit);
+  assert.equal(hit.ruleId, "CST-02");
   assert.equal(hit.kind, "arithmetic_mismatch");
 });
 
@@ -71,7 +72,7 @@ test("runVatRules is clean on a well-formed batch", () => {
   assert.deepEqual(runVatRules(lines, taxonomy), []);
 });
 
-test("validateBatch flags a prior-period value that does not reconcile (CST-05)", () => {
+test("validateBatch flags a prior-period value that does not reconcile", () => {
   const batch = {
     lines: [{ id: "L1", supplier: "Enel Energia", net: 800, vat: 176, account: "60.20", confidence: 0.97 }],
     expected: [],
@@ -79,8 +80,8 @@ test("validateBatch flags a prior-period value that does not reconcile (CST-05)"
   const priorPeriod = { lines: [{ supplier: "Enel Energia", net: 400 }] }; // 100% swing
   const taxonomy = [{ code: "60.20", name: "Utenze", rate: 22 }];
   const { anomalies } = validateBatch(batch, { priorPeriod, taxonomy });
-  const hit = anomalies.find((a) => a.ruleId === "CST-05");
-  assert.ok(hit, "expected a CST-05 value-deviation anomaly");
+  const hit = anomalies.find((a) => a.ruleId === "PRIOR-PERIOD");
+  assert.ok(hit, "expected a PRIOR-PERIOD value-deviation anomaly");
 });
 
 test("validateBatch stays clean when nothing is actually wrong", () => {
