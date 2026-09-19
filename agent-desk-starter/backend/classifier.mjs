@@ -20,10 +20,5 @@ export function classifyLine(line) {
   return { ...line, account, confidence, source: "heuristic", needsHuman: confidence < THRESHOLD };
 }
 
-/** Learn an operator correction as a durable supplier -> account rule (Cortex knowledge). */
-export function learn(line, account, confirmedBy, evidenceId) {
-  return knowledge.upsert({
-    key: `coa:${line.supplier}`, kind: "coa_mapping", scope: "client:rossi_srl",
-    value: account, confidence: 0.98, source: "correction", confirmedBy, evidenceId,
-  });
-}
+// Learning a correction into a durable rule is L'Archivista's job now — see
+// backend/archivista.mjs (proposeRule / confirmRule / learnConfirmed).

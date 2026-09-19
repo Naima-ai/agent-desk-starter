@@ -53,7 +53,8 @@ other file has to agree with them — they're the shared rulebook.
 
 | File | Agent | What it's for |
 |---|---|---|
-| `validator.mjs` | L'Addetto IVA (VAT clerk) | Checks a VAT batch: is anything missing, does anything look wrong compared to last time. Sorts problems into a "needs a category" pile and a "missing document" pile. |
+| `validator.mjs` | L'Addetto IVA (VAT clerk) | Checks a VAT batch: is anything missing, does anything look wrong compared to last time, and does it obey the actual VAT rules (via `vatRules.mjs`). Sorts problems into a "needs a category" pile and a "missing document / broken rule" pile. |
+| `vatRules.mjs` | — (used by L'Addetto IVA) | The actual Italian VAT rules, in code: is the rate a real one, does the rate match what this cost category is supposed to charge, does 0% VAT carry the code it must, do the numbers add up. Each check names the same rule ID as the compliance rulebook, so the two documents agree. |
 | `classifier.mjs` | Il Classificatore (Classifier) | Takes a line with a "needs a category" problem and figures out which accounting category it belongs to, with a confidence score. Below a certain confidence, it asks a human instead of guessing. |
 | `amministrativo.mjs` | L'Amministrativo (Client Assistant) | Runs on the client's side. Decides what paperwork is missing for the period, and whether to fetch it automatically or ask the business owner directly on WhatsApp. |
 | `smistatore.mjs` | Lo Smistatore (Dispatcher) | The traffic controller. Every message coming in — from a person or another agent — gets routed to the right place, once, based on who's responsible and available. Never answers the client itself. |
