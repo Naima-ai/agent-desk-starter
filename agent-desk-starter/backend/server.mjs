@@ -1,5 +1,6 @@
 // backend/server.mjs — zero-framework HTTP + Server-Sent Events.
 // Serves the frontend, streams bus events, exposes compile + run + gate endpoints.
+import "./loadEnv.mjs"; // must be first — connector modules read process.env at import time
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";

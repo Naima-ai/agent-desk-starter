@@ -107,7 +107,7 @@ test("validateBatch stays clean when nothing is actually wrong", () => {
 
 test("Archivist: a rule starts in shadow mode, then a human confirms it at the gate", () => {
   const key = `coa:TestSupplier_${Date.now()}`;
-  archivista.proposeRule({ key, kind: "coa_mapping", scope: "client:test", value: "60.10", source: "correction" });
+  archivista.proposeRule({ key, kind: "coa_mapping", scope: "client:test", value: "60.10", source: "correction", evidenceId: "ev_propose_test" });
   assert.equal(knowledge.get(key).status, "shadow");
 
   archivista.confirmRule(key, "Bianchi", "ev_test");
@@ -115,6 +115,12 @@ test("Archivist: a rule starts in shadow mode, then a human confirms it at the g
   assert.equal(confirmed.status, "confirmed");
   assert.equal(confirmed.confidence, 0.98);
   assert.equal(confirmed.confirmedBy, "Bianchi");
+});
+
+test("Archivist: REFUSED — never stores a rule without evidence", () => {
+  const key = `coa:NoEvidenceSupplier_${Date.now()}`;
+  assert.throws(() => archivista.proposeRule({ key, kind: "coa_mapping", scope: "client:test", value: "60.10", source: "correction" }), /REFUSED/);
+  assert.throws(() => archivista.confirmRule(key, "Bianchi"), /REFUSED/);
 });
 
 // --- FMT-03: supplier Partita IVA check digit -------------------------------
