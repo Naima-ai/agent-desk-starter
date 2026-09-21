@@ -71,8 +71,15 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
   // 3 — Solve the low-confidence tail (pre-fill): Il Classificatore.
   for (const line of tail) {
     const r = await classifyLine(line, vatBatch.client, chartOfAccounts);
-    publish("coa", { supplier: line.supplier, account: r.account, confidence: r.confidence, options: chartOfAccounts });
-    feed("il_classificatore", `Tail line ${line.id} (${line.supplier}) -> account ${r.account} @ conf ${r.confidence}.`);
+    publish("coa", { supplier: line.supplier, account: r.account, confidence: r.confidence, source: r.source, options: chartOfAccounts });
+    // r.source is otherwise invisible in the UI — memory (a rule already
+    // learned for this client+supplier), slm (a real modelGateway.mjs call —
+    // Meet's classifier work), or heuristic (the plain keyword fallback, only
+    // reached if the model call itself throws) all produce the exact same
+    // "-> account @ conf" shape, so without this label there was no visible
+    // way to tell which one actually ran.
+    const sourceLabel = { memory: "remembered rule", slm: "model call", heuristic: "keyword fallback" }[r.source] || r.source;
+    feed("il_classificatore", `Tail line ${line.id} (${line.supplier}) -> account ${r.account} @ conf ${r.confidence} (via ${sourceLabel}).`);
     await wait(500);
 
 // 5 (memory) — low confidence -> a REAL gate: the run pauses here until a

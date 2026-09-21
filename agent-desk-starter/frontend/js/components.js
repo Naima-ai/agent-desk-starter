@@ -381,8 +381,9 @@
       h("div", { className: "payload-line" }, `confirmed by ${e.record.confirmedBy || "?"} \u00b7 confidence ${e.record.confidence}`),
       h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })));
 
+    const COA_SOURCE_LABEL = { memory: "remembered rule", slm: "model call", heuristic: "keyword fallback" };
     const coaRow = (e, i) => h("div", { className: "ledger-row", key: "c" + i },
-      `${e.supplier} \u2192 ${e.account} @ ${e.confidence}`);
+      `${e.supplier} \u2192 ${e.account} @ ${e.confidence}` + (e.source ? ` (${COA_SOURCE_LABEL[e.source] || e.source})` : ""));
 
     const factRow = (e, i) => h("div", { className: "ledger-row", key: "cm" + i },
       h("div", null, `${e.record.key.split(":").slice(2).join(":")} \u2192 ${JSON.stringify(e.record.value).slice(0, 140)}`),
