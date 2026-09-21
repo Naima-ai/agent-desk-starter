@@ -1,6 +1,7 @@
 // backend/compiler.mjs
 // The Job Card Compiler: NL job description -> validated manifest -> OpenClaw skill file.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { validateManifest } from "../contracts/manifestSchema.mjs";
@@ -8,6 +9,31 @@ import { askModel } from "./modelGateway.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seatsDir = join(here, "..", "contracts", "seats");
+
+// The manifest actually driving each seat's behavior right now — until
+// OpenClaw exists as a real runtime that LOADS a compiled manifest and
+// executes an agent from it, this in-memory cache is the closest thing:
+// compiling a seat (Agent page, or POST /api/compile/:seat) updates it, and
+// the few call sites that already have a manifest-consuming hook (today:
+// just lAmministrativo.mjs's skillEnabled()/assertAllowed()) read from here
+// instead of a fixed static import — so compiling something the SAME
+// server session's next real run actually reflects it. Resets to the seed
+// manifests on restart, same as this server's other in-memory state.
+const activeManifests = new Map(); // seatId -> validated manifest
+
+function loadSeedManifestSync(seatId) {
+  const raw = readFileSync(join(seatsDir, `${seatId}.json`), "utf8");
+  return validateManifest(JSON.parse(raw));
+}
+
+/** Synchronous on purpose — assertAllowed() is a hot, synchronous hard-block
+ *  check (tests call it as `assert.throws(() => fn())`), and making the
+ *  active-manifest lookup async would force that whole call chain async
+ *  too, for no real benefit once the manifest is already cached. */
+export function getActiveManifest(seatId) {
+  if (!activeManifests.has(seatId)) activeManifests.set(seatId, loadSeedManifestSync(seatId));
+  return activeManifests.get(seatId);
+}
 
 const COMPILER_SYSTEM_PROMPT = `Sei il Chief of Staff (Il Capogabinetto) del sistema Loop Agent Desk per commercialisti italiani.
 Il tuo compito è analizzare la Job Description di un agente (scritta in linguaggio naturale italiano) 
@@ -97,6 +123,7 @@ export async function compile(seatId) {
   const outDir = join(here, "..", "build", "skills");
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, `${seatId}.md`), skill, "utf8");
+  activeManifests.set(seatId, manifest); // this is now what the real pipeline reads for this seat
   return { manifest, skill };
 }
 
@@ -108,6 +135,7 @@ export async function compileWithJobText(seatId, jobText) {
   const outDir = join(here, "..", "build", "skills");
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, `${seatId}.md`), skill, "utf8");
+  activeManifests.set(seatId, manifest); // this is now what the real pipeline reads for this seat
   return { manifest, skill, usedCustomJobText: Boolean(jobText) };
 }
 
@@ -138,4 +166,4 @@ ${m.gate ? `\n## Human gate\n- ${m.gate}` : ""}
 `;
 }
 
-export default { compile, compileWithJobText, parseJobToManifest, parseJobTextToManifest, emitSkill };
+export default { compile, compileWithJobText, parseJobToManifest, parseJobTextToManifest, emitSkill, getActiveManifest };

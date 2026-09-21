@@ -18,6 +18,7 @@ import * as wa from "./connectors/whatsapp.mjs";
 import { readSdiInbox } from "./connectors/sdiInbox.stub.mjs";
 import { draftInvoice } from "./connectors/fattureInCloudDraft.stub.mjs";
 import { startLadder } from "./escalationLadder.mjs";
+import { getActiveManifest } from "./compiler.mjs";
 import { EventEmitter } from "node:events";
 
 const SEAT = "l_amministrativo";
@@ -41,11 +42,21 @@ export const pendingDocumentRequests = new Map();
 export const pendingQuestions = new Map();
 
 // ---------------------------------------------------------------------------
-// Hard blocks. Enforced at the tool layer, in code, on every call — 
+// Hard blocks. Enforced at the tool layer, in code, on every call —
 // not a prompt hint the model could talk itself around.
+//
+// The compiled manifest's `refuses` list is checked TOO, but only ever
+// ADDS restrictions on top of REFUSES above, never removes any — a job
+// description compiled through a model (even a real one, let alone the
+// offline fallback) is not a trusted source for RELAXING a hard block. If
+// this ever read `manifest.refuses` as a replacement instead of a union,
+// typing a job description that simply omits "payments" would silently
+// re-enable it — that would turn "enforced in code" into exactly the
+// prompt-shaped suggestion this design explicitly says it isn't.
 // ---------------------------------------------------------------------------
 function assertAllowed(action) {
-  if (REFUSES.includes(action)) {
+  const manifestRefuses = getActiveManifest(SEAT)?.refuses || [];
+  if (REFUSES.includes(action) || manifestRefuses.includes(action)) {
     throw new Error(`REFUSED: ${SEAT} will not perform "${action}" — hard block, not a suggestion.`);
   }
 }

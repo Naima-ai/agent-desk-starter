@@ -12,7 +12,7 @@ import * as archivista from "../archivista.mjs";
 import * as teamSystem from "../connectors/teamSystem.mjs";
 import * as ade from "../connectors/adePortal.mjs";
 import * as La from "../lAmministrativo.mjs";
-import lAmministrativoManifest from "../../contracts/seats/l_amministrativo.json" with { type: "json" };
+import { getActiveManifest } from "../compiler.mjs";
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const a2a = (m) => publish("a2a", { message: makeMessage(m) });
@@ -41,6 +41,14 @@ function describeAnomaly(an) {
 
 export async function runVatFilingPath(clientId = "rossi_srl") {
   publish("board", { step: "start", label: "Pre-filing validation started" });
+
+  // Whatever was last compiled for L'Amministrativo (Agent page, or POST
+  // /api/compile/l_amministrativo) — falls back to the pre-written seed
+  // manifest if nothing's been compiled yet this server session. This is
+  // what makes compiling a seat actually MEAN something for skills (which
+  // of the 7 are switched on): a fixed static import never changed, no
+  // matter what you compiled.
+  const lAmministrativoManifest = getActiveManifest("l_amministrativo");
 
   // 1 — TeamSystem compiles the periodic VAT/LIPE/F24 batch from the ledger,
   // and hands over the client's master data + chart of accounts (the
