@@ -8,25 +8,32 @@ import { subscribe, history, publish } from "./bus.mjs";
 import { makeMessage } from "../contracts/a2aSchema.mjs";
 import { compile, compileWithJobText } from "./compiler.mjs";
 import { runVatFilingPath } from "./scenario/vatFilingPath.mjs";
+import * as teamSystem from "./connectors/teamSystem.mjs";
 import {
   pendingGates, pendingDocumentRequests, pendingQuestions,
   resolveDocumentRequest, resolveQuestionById, deliverMonthlyPack, onLadderEvent,
   collectDocument, draftAndSendInvoice, sendReminder, logAttendanceOrExpense,
   answerEmployeeQuestion, trackDeadline, askStudio,
 } from "./lAmministrativo.mjs";
+import { onLadderEvent as onClassificationLadderEvent } from "./classificationGate.mjs";
 
-// Bridge L'Amministrativo's reminder/escalation ladder onto the SSE bus so the
-// frontend sees reminders and escalations live, not just the initial "pending" state. 
-onLadderEvent((e) => {
+// Bridge both L'Amministrativo's (owner-approval, WhatsApp-facing) and Il
+// Classificatore's (studio-internal) reminder/escalation ladders onto the
+// SSE bus so the frontend sees reminders and escalations live, not just the
+// initial "pending" state. Wording differs by seat: only L'Amministrativo's
+// reminders actually go out over WhatsApp to the client owner.
+onLadderEvent((e) => bridgeLadderEvent(e, "sent to the owner"));
+onClassificationLadderEvent((e) => bridgeLadderEvent(e, "still needs a studio professional to confirm it"));
+function bridgeLadderEvent(e, remindPhrase) {
   publish("ladder", e);
   if (e.event === "reminder") {
-    feedFromLadder(e, `reminder #${e.n} sent to the owner${e.kind === "gate" ? ` for gate ${e.gateId}` : ` for request ${e.requestId}`}.`, "warn");
+    feedFromLadder(e, `reminder #${e.n} ${remindPhrase}${e.kind === "gate" ? ` (gate ${e.gateId})` : ` (request ${e.requestId})`}.`, "warn");
   } else if (e.event === "escalate") {
     feedFromLadder(e, `no response after ${e.kind === "gate" ? "the gate" : "the document request"} reminders — escalated to Lo Smistatore.`, "warn");
   }
-});
+}
 function feedFromLadder(e, suffix, tone) {
-  publish("feed", { agent: "l_amministrativo", text: `${e.kind === "gate" ? "Gate" : "Document request"} ${suffix}`, tone });
+  publish("feed", { agent: e.seat || "l_amministrativo", text: `${e.kind === "gate" ? "Gate" : "Document request"} ${suffix}`, tone });
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -35,10 +42,16 @@ const PORT = process.env.PORT || 5173;
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
 function readBody(req) {
+  // Collect raw Buffer chunks and decode ONCE at the end, explicitly as
+  // UTF-8 — `data += chunk` coerces each Buffer independently and can also
+  // split a multi-byte UTF-8 character across chunks, corrupting non-ASCII
+  // text (found for real in the sibling TeamSystem Firm mock server: an em
+  // dash came out as mojibake until this was fixed there too). This matters
+  // here specifically because job descriptions are written in Italian.
   return new Promise((resolve, reject) => {
-    let data = "";
-    req.on("data", (c) => (data += c));
-    req.on("end", () => resolve(data));
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }
@@ -54,8 +67,25 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // GET /api/ts-clients — the roster from the TeamSystem Firm mock, for a
+  // real client picker instead of a single hardcoded demo run.
+  if (url.pathname === "/api/ts-clients" && req.method === "GET") {
+    const list = await teamSystem.listClients();
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
+    return;
+  }
+
   if (url.pathname === "/api/run-demo" || url.pathname === "/api/run-golden-path") {
-    runVatFilingPath();
+    const clientId = url.searchParams.get("client") || "rossi_srl";
+    // Never let a failure anywhere in the pipeline become an unhandled
+    // rejection — that crashes the whole Node process (this happened for
+    // real: a rejected Fatture in Cloud call took the entire server down
+    // mid-demo, with no error visible in the UI, just silence).
+    runVatFilingPath(clientId).catch((e) => {
+      console.error("[demo] run failed:", e);
+      publish("board", { step: "error", label: `Run failed for ${clientId}: ${e.message}` });
+      publish("feed", { agent: "system", text: `Run failed: ${e.message}`, tone: "warn" });
+    });
     res.writeHead(202).end('{"started":true}');
     return;
   }

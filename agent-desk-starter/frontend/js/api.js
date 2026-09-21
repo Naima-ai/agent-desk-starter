@@ -39,7 +39,16 @@
       es.onerror = () => setLive(false);
       es.onmessage = (m) => {
         const e = JSON.parse(m.data);
-        setEv((s) => ({ ...s, [e.channel]: [...(s[e.channel] || []), e] }));
+        setEv((s) => {
+          // "start" marks the beginning of one client's run — without this,
+          // the Board/feed just accumulate every run's steps forever (this
+          // server keeps its full event history and replays all of it to
+          // every new connection too), so whichever client was validated
+          // first this session — usually Rossi Srl, the default — never
+          // clears and its steps end up dominating every later client's view.
+          if (e.channel === "board" && e.step === "start") return { ...s, board: [e], feed: [] };
+          return { ...s, [e.channel]: [...(s[e.channel] || []), e] };
+        });
       };
       return () => es.close();
     }, []);
@@ -73,7 +82,8 @@
     return r.json();
   }
 
-  const runDemo               = () => getJSON("/api/run-demo");
+  const runDemo               = (clientId) => getJSON(`/api/run-demo${clientId ? `?client=${encodeURIComponent(clientId)}` : ""}`);
+  const getTsClients          = () => getJSON("/api/ts-clients");
   const getGates               = () => getJSON("/api/gates");
   const approveGate            = (id, approvedBy) => postJSON(`/api/gate/${id}/approve`, { approvedBy });
   const denyGate                = (id, reason) => postJSON(`/api/gate/${id}/deny`, { reason });
@@ -166,7 +176,7 @@
 
   window.AgentDeskAPI = {
     SEATS, SEAT_BY_ID, AGENT_COLOR, A2A_TYPE_META, SKILL_TEST_CONFIG,
-    useBus, usePendingCount, useNowTick, runDemo, getGates, approveGate, denyGate,
+    useBus, usePendingCount, useNowTick, runDemo, getTsClients, getGates, approveGate, denyGate,
     getDocumentRequests, resolveDocumentRequest, getQuestions, resolveQuestion,
     compileSeat, deliverPack, getRuntimeStatus, testSkill,
     timeAgo, tokenizeJSON,

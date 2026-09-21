@@ -3,9 +3,10 @@
   const h = React.createElement;
   const { useState } = React;
   const { useBus, usePendingCount, runDemo } = window.AgentDeskAPI;
-  const { Sidebar, ViewHeader, Roster, AgentPage, A2AStream, Board, Memory, Approvals } = window.AgentDeskComponents;
+  const { Sidebar, ViewHeader, Roster, AgentPage, A2AStream, Board, Memory, Approvals, Clients } = window.AgentDeskComponents;
 
   const VIEW_META = {
+    clients:   { title: "Clients",      description: "Real client data from TeamSystem \u2014 pick one to pull its VAT batch through the real pipeline." },
     roster:    { title: "Roster",       description: "Every seat on the desk \u2014 who they are and where they run." },
     agent:     { title: "Agent page",   description: "Compile a seat from its job description and inspect what it produces." },
     stream:    { title: "A2A stream",   description: "Typed, signed messages moving between agents" },
@@ -16,17 +17,26 @@
 
   function App() {
     const { ev, live } = useBus();
-    const [view, setView] = useState("roster");
+    const [view, setView] = useState("clients");
     const [running, setRunning] = useState(false);
     const [selectedSeat, setSelectedSeat] = useState(null);
+    const [lastRunClientId, setLastRunClientId] = useState(null);
 
-    // Refreshes whenever new gate/ladder activity arrives on the bus, 
+    // Refreshes whenever new gate/ladder activity arrives on the bus,
     // or every few seconds regardless
     const pendingCount = usePendingCount(ev.gate.length + ev.ladder.length);
 
     const onRunDemo = async () => {
+      setLastRunClientId("rossi_srl");
       setRunning(true);
       try { await runDemo(); } finally { setTimeout(() => setRunning(false), 4000); }
+    };
+
+    const onValidateClient = async (clientId) => {
+      setLastRunClientId(clientId);
+      setRunning(true);
+      setView("board");
+      try { await runDemo(clientId); } finally { setTimeout(() => setRunning(false), 4000); }
     };
 
     const goToAgentPage = (seatId) => { setSelectedSeat(seatId); setView("agent"); };
@@ -34,7 +44,8 @@
     const meta = VIEW_META[view];
 
     let content;
-    if (view === "roster") content = h(Roster, { onSelectSeat: goToAgentPage });
+    if (view === "clients") content = h(Clients, { onValidate: onValidateClient, running, lastRunClientId });
+    else if (view === "roster") content = h(Roster, { onSelectSeat: goToAgentPage });
     else if (view === "agent") content = h(AgentPage, { initialSeat: selectedSeat, onSeatChange: setSelectedSeat });
     else if (view === "stream") content = h(A2AStream, { messages: ev.a2a });
     else if (view === "board") content = h(Board, { board: ev.board, feed: ev.feed });

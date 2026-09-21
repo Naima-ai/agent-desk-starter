@@ -14,6 +14,7 @@
     approvals: ["M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z", "M9 12l2 2 4-4"],
     play:      ["M6 4l14 8-14 8V4z"],
     chevron:   ["M15 5l-7 7 7 7"],
+    clients:   ["M4 20V10l8-6 8 6v10", "M9 20v-6h6v6"],
   };
   function Icon({ name, size = 18 }) {
     return h("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
@@ -44,6 +45,7 @@
 
   // -------------------------------------------------------------- sidebar --
   const NAV = [
+    { id: "clients",   label: "Clients",      shortLabel: "Clients",  icon: "clients" },
     { id: "roster",    label: "Roster",       shortLabel: "Roster",   icon: "roster" },
     { id: "agent",     label: "Agent page",   shortLabel: "Agent",    icon: "agent" },
     { id: "stream",    label: "A2A stream",   shortLabel: "A2A",      icon: "stream" },
@@ -345,6 +347,21 @@
   }
 
   // ---------------------------------------------------------------- memory --
+  // A collapsible <details> section with a title, a plain-language one-line
+  // explanation of what it actually is, and a count badge \u2014 the four kinds
+  // of record shown here (live proposal / learned rule / client fact /
+  // evidence) look superficially similar (all "some agent remembered
+  // something") but mean genuinely different things, so each gets its own
+  // section instead of being dumped into one list.
+  function MemSection({ title, desc, count, defaultOpen, children }) {
+    return h("details", { className: "mem-section", open: defaultOpen || undefined },
+      h("summary", { className: "mem-summary" },
+        h("span", { className: "mem-summary-title" }, title),
+        h("span", { className: "mem-count" }, count)),
+      h("p", { className: "mem-desc" }, desc),
+      count === 0 ? h(EmptyState, null, "Nothing here yet.") : h("div", { className: "mem-body" }, children));
+  }
+
   function Memory({ evidence, knowledge, coa }) {
     if (evidence.length === 0 && knowledge.length === 0 && coa.length === 0) {
       return h(EmptyState, null, "Nothing recorded yet \u2014 run the demo to populate the evidence and knowledge stores.");
@@ -352,35 +369,66 @@
 
     const packs = evidence.filter((e) => e.record.kind === "monthly_pack");
     const generalEvidence = evidence.filter((e) => e.record.kind !== "monthly_pack");
-    const clientMemory = knowledge.filter((e) => e.record.key && e.record.key.startsWith("client:"));
-    const sharedMemory = knowledge.filter((e) => !e.record.key || !e.record.key.startsWith("client:"));
+    // L'Archivista's confirmed rules and L'Amministrativo's own client facts
+    // are BOTH keyed "client:<id>:..." (same partition convention), so they
+    // have to be told apart by `kind`, not just by key prefix.
+    const archivistRules = knowledge.filter((e) => e.record.kind === "coa_mapping");
+    const clientFacts = knowledge.filter((e) => e.record.kind !== "coa_mapping" && e.record.key && e.record.key.startsWith("client:"));
+    const sharedKnowledge = knowledge.filter((e) => e.record.kind !== "coa_mapping" && (!e.record.key || !e.record.key.startsWith("client:")));
 
-    return h("div", { className: "memory-grid" },
-      h("div", { className: "panel" },
-        packs.length > 0 && h("div", { className: "sub-block", style: { marginTop: 0, paddingTop: 0, borderTop: "none" } },
-          h("h4", { className: "panel-subtitle" }, "Delivered packs ", h("span", null, "\u2014 L'Amministrativo's pack_delivered runs")),
-          packs.map((e, i) => h("div", { className: "ledger-row pack-row", key: "p" + i },
-            h("div", null, h("b", null, `${e.record.clientId} \u00b7 ${e.record.period}`)),
-            h("div", { className: "payload-line" },
-              `${e.record.pack.docs.length} doc(s) \u00b7 ${e.record.pack.missing.length} missing \u00b7 ${e.record.pack.questions.length} open question(s)`)))),
-        h("h3", { className: "panel-title" }, "Evidence store ", h("span", { className: "panel-subtitle" }, "immutable, append-only")),
-        generalEvidence.length === 0 ? h(EmptyState, null, "No other evidence recorded yet.") :
-          generalEvidence.map((e, i) => h("div", { className: "ledger-row", key: i }, h("span", { className: "hash" }, `${e.record.id} \u00b7 ${e.record.hash}  `), JSON.stringify(e.record))),
-        coa.length > 0 && h("div", { className: "sub-block" },
-          h("h4", { className: "panel-subtitle" }, "Chart-of-accounts proposals"),
-          coa.map((e, i) => h("div", { className: "ledger-row", key: "c" + i }, `${e.supplier} \u2192 ${e.account} @ ${e.confidence}`)))),
-      h("div", { className: "panel" },
-        h("h3", { className: "panel-title" }, "L'Amministrativo \u2014 client memory ", h("span", { className: "panel-subtitle" }, "own client's L3 mirror only")),
-        clientMemory.length === 0 ? h(EmptyState, null, "No client-scoped facts recorded yet.") :
-          clientMemory.map((e, i) => h("div", { className: "ledger-row", key: "cm" + i },
-            h("div", null, `${e.record.key.split(":").slice(2).join(":")} \u2192 ${JSON.stringify(e.record.value).slice(0, 140)}`),
-            h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })))),
-        h("div", { className: "sub-block" },
-          h("h4", { className: "panel-subtitle" }, "Shared knowledge ", h("span", null, "\u2014 other seats, not client-scoped")),
-          sharedMemory.length === 0 ? h(EmptyState, null, "No rules confirmed yet.") :
-            sharedMemory.map((e, i) => h("div", { className: "ledger-row", key: "sm" + i },
-              h("div", null, `${e.record.key} \u2192 ${JSON.stringify(e.record.value)}`),
-              h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })))))));
+    const ruleRow = (e, i) => h("div", { className: "ledger-row", key: "ar" + i },
+      h("div", null, h("b", null, e.record.scope || "?"), ` \u00b7 ${e.record.key.split(":coa:")[1] || e.record.key} \u2192 ${e.record.value}`),
+      h("div", { className: "payload-line" }, `confirmed by ${e.record.confirmedBy || "?"} \u00b7 confidence ${e.record.confidence}`),
+      h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })));
+
+    const coaRow = (e, i) => h("div", { className: "ledger-row", key: "c" + i },
+      `${e.supplier} \u2192 ${e.account} @ ${e.confidence}`);
+
+    const factRow = (e, i) => h("div", { className: "ledger-row", key: "cm" + i },
+      h("div", null, `${e.record.key.split(":").slice(2).join(":")} \u2192 ${JSON.stringify(e.record.value).slice(0, 140)}`),
+      h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })));
+
+    const sharedRow = (e, i) => h("div", { className: "ledger-row", key: "sm" + i },
+      h("div", null, `${e.record.key} \u2192 ${JSON.stringify(e.record.value)}`),
+      h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })));
+
+    const packRow = (e, i) => h("div", { className: "ledger-row pack-row", key: "p" + i },
+      h("div", null, h("b", null, `${e.record.clientId} \u00b7 ${e.record.period}`)),
+      h("div", { className: "payload-line" },
+        `${e.record.pack.docs.length} doc(s) \u00b7 ${e.record.pack.missing.length} missing \u00b7 ${e.record.pack.questions.length} open question(s)`));
+
+    const evidenceRow = (e, i) => h("div", { className: "ledger-row", key: i },
+      h("span", { className: "hash" }, `${e.record.id} \u00b7 ${e.record.hash}  `), JSON.stringify(e.record));
+
+    const leftPanel = h("div", { className: "panel", style: { display: "flex", flexDirection: "column", gap: 14 } },
+      h(MemSection, {
+        title: "Learned classification rules", count: archivistRules.length, defaultOpen: true,
+        desc: "L'Archivista's CONFIRMED supplier \u2192 account mappings. Saved to disk, survives a restart, and auto-applied the next time THIS SAME CLIENT sees this same supplier \u2014 this is what actually shrinks the low-confidence tail over time. Scoped per client, so the same supplier name at a different client needs its own confirmation.",
+      }, archivistRules.map(ruleRow)),
+      h(MemSection, {
+        title: "This run's classification proposals", count: coa.length,
+        desc: "What Il Classificatore just suggested for each low-confidence line \u2014 live for THIS run only, not saved memory. Thrown away on the next run unless a human confirms one, which is what turns it into a learned rule above.",
+      }, coa.map(coaRow)),
+      h(MemSection, {
+        title: "Client facts \u2014 L'Amministrativo", count: clientFacts.length,
+        desc: "Administrative facts this seat recorded for one specific client \u2014 a logged expense, a delivered pack, an invoice draft. Its own memory, not shared with the studio side.",
+      }, clientFacts.map(factRow)),
+      sharedKnowledge.length > 0 && h(MemSection, {
+        title: "Shared knowledge \u2014 not client-scoped", count: sharedKnowledge.length,
+        desc: "Not tied to any one client \u2014 applies everywhere. Rare; almost everything here should be client-scoped.",
+      }, sharedKnowledge.map(sharedRow)));
+
+    const rightPanel = h("div", { className: "panel", style: { display: "flex", flexDirection: "column", gap: 14 } },
+      packs.length > 0 && h(MemSection, {
+        title: "Delivered packs", count: packs.length,
+        desc: "L'Amministrativo's pack_delivered runs \u2014 what got proactively assembled and sent for a client/period.",
+      }, packs.map(packRow)),
+      h(MemSection, {
+        title: "Evidence store", count: generalEvidence.length, defaultOpen: true,
+        desc: "Immutable, append-only proof that something happened \u2014 a document received, a human asked to confirm a classification, an invoice approved. Never edited or deleted, only added to.",
+      }, generalEvidence.map(evidenceRow)));
+
+    return h("div", { className: "memory-grid" }, leftPanel, rightPanel);
   }
 
   // ------------------------------------------------------------ approvals --
@@ -397,22 +445,30 @@
       [0, 1].map((i) => h("span", { key: i, className: `dot${remindersSent > i ? " filled" : ""}` })),
       h("span", { className: `dot${escalated ? " escalated" : ""}` }));
 
-    const onApprove = async (id) => { await approveGate(id, "owner_mario"); refresh(); };
+    // Who's actually doing the approving depends on WHAT'S being approved \u2014
+    // an invoice send-off is the client owner's call (was always "owner_mario"
+    // here); a chart-of-accounts classification is a studio call, nobody's
+    // "owner". Recorded as confirmedBy on the learned rule (Memory panel), so
+    // getting this right matters, not just cosmetic.
+    const approverFor = (action) => (action === "confirm_classification" ? "studio_professional" : "owner_mario");
+    const GATE_LABEL = { confirm_classification: "Confirm classification", invoice: "Send invoice" };
+
+    const onApprove = async (id, action) => { await approveGate(id, approverFor(action)); refresh(); };
     const onDeny = async (id) => { await denyGate(id, "declined in demo"); refresh(); };
     const onReceived = async (id) => { await resolveDocumentRequest(id, "IT" + Math.floor(Math.random() * 900 + 100)); refresh(); };
     const onSimulateReply = async (id) => { await resolveQuestion(id); refresh(); }; // no answer/evidenceId -> server fills a plausible default, same spirit as "Mark received"
 
     return h("div", null,
-      h("h3", { className: "section-title" }, "Owner approvals"),
+      h("h3", { className: "section-title" }, "Approvals"),
       gates.length === 0
-        ? h(EmptyState, null, "No pending approvals. Run the demo \u2014 L'Amministrativo drafts a demo invoice partway through.")
+        ? h(EmptyState, null, "No pending approvals. Run the demo \u2014 a low-confidence classification or a demo invoice needs a human partway through.")
         : gates.map((g) => h("div", { className: `approval-card${g.escalated ? " escalated" : ""}`, key: g.id },
             h("div", { className: "approval-top" },
-              h("b", null, g.action), ladderDots(g.remindersSent, g.escalated),
+              h("b", null, GATE_LABEL[g.action] || g.action), ladderDots(g.remindersSent, g.escalated),
               g.escalated && h("span", { className: "pill-escalated" }, "escalated to Lo Smistatore")),
             h("div", { className: "payload-line" }, JSON.stringify(g.payload)),
             h("div", { className: "approval-actions" },
-              h("button", { className: "btn-approve", onClick: () => onApprove(g.id) }, "Approve"),
+              h("button", { className: "btn-approve", onClick: () => onApprove(g.id, g.action) }, "Approve"),
               h("button", { className: "btn-deny", onClick: () => onDeny(g.id) }, "Deny")))),
 
       h("h3", { className: "section-title" }, "Document requests"),
@@ -446,8 +502,40 @@
             h("span", { className: "text" }, e.gateId || e.requestId))))));
   }
 
+  // ---- Clients: real per-client data ingestion, not just a single "Run
+  // demo" button. Lists every client the TeamSystem Firm mock actually has
+  // (10 of them, each with real invoices/XML/VAT data), and validating one
+  // is a real fetch through the real pipeline, not a canned script. ----
+  function Clients({ onValidate, running, lastRunClientId }) {
+    const [clients, setClients] = useState(null);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+      fetch("/api/ts-clients").then((r) => r.json()).then(setClients)
+        .catch((e) => setError(String(e)));
+    }, []);
+
+    if (error) return h(EmptyState, null, `Couldn't reach the TeamSystem Firm mock: ${error}. Is it running (npm start in teamsystem-firm-mock)?`);
+    if (!clients) return h(EmptyState, null, "Loading clients from the TeamSystem Firm mock…");
+
+    return h("div", null,
+      h("p", { className: "muted", style: { marginBottom: 14 } },
+        `${clients.length} client(s) available from TeamSystem. Pick one to pull its real VAT batch through the full pipeline — TeamSystem → Fatture in Cloud cross-check → validation → the client loop.`),
+      h("div", { className: "panel" },
+        clients.map((c) => h("div", { className: "feed-row", key: c.id, style: { alignItems: "center" } },
+          h("div", { style: { flex: 1 } },
+            h("div", { style: { fontWeight: 600 } }, c.name),
+            h("div", { className: "text" }, `${c.regime} · ATECO ${c.ateco} · P.IVA ${c.piva} · ${c.lineCount} line(s) · ${c.period}`)),
+          h("button", {
+            className: "run-demo-btn compact",
+            disabled: running,
+            onClick: () => onValidate(c.id),
+            title: `Validate ${c.name}`,
+          }, running && lastRunClientId === c.id ? "Running…" : "Validate")))));
+  }
+
   window.AgentDeskComponents = {
     Icon, StatusDot, ViewHeader, EmptyState, SeatMonogram, Sidebar,
-    Roster, AgentPage, A2AStream, Board, Memory, Approvals,
+    Roster, AgentPage, A2AStream, Board, Memory, Approvals, Clients,
   };
 })();

@@ -1,0 +1,5 @@
+id_riga,fornitore,descrizione,imponibile,iva,conto,affidabilita,data_fattura
+L201,Colombo Logistica e Trasporti Srl,Trasporto merci c/terzi — agosto 2026,"980,00","215,60",60.10,0.62,05/08/2026
+L202,Ferraro Impianti Srl,Manutenzione ordinaria impianto di climatizzazione,"540,00","118,80",60.10,0.9,11/08/2026
+L203,Studio Grafico Neri,Progettazione grafica catalogo prodotti 2026,"1200,00","264,00",,0.55,19/08/2026
+L204,Vitali Materiali Edili Srl,Fornitura materiali edili — cantiere via Garibaldi,"3150,75","693,17",30.10,0.95,27/08/2026

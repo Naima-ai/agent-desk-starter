@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TeamSystem Firm — mock</title>
+<style>
+  :root{ --navy:#07234F; --blue:#0A63E0; --muted:#5C6B80; --card:#EEF3FC; --border:#D5E2F5; --green:#1F9D6B; --orange:#F08000; }
+  *{box-sizing:border-box} body{margin:0;font-family:Arial,Helvetica,sans-serif;color:var(--navy);background:#fff;overflow-x:hidden}
+  header{display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid var(--border)}
+  header .logo{font-weight:800;font-size:18px} header small{color:var(--muted)}
+  main{display:grid;grid-template-columns:minmax(220px,320px) 1fr;min-height:calc(100vh - 60px)}
+  .list{border-right:1px solid var(--border);overflow:auto}
+  .row{padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer}
+  .row:hover{background:var(--card)} .row.active{background:var(--card);border-left:3px solid var(--blue)}
+  .row b{display:block;font-size:14px} .row small{color:var(--muted);font-size:12px}
+  .detail{padding:20px 28px;overflow:auto;min-width:0}
+  .badge{display:inline-block;font-size:11px;font-weight:700;color:var(--blue);background:var(--card);border:1px solid var(--border);border-radius:6px;padding:2px 8px;margin-right:6px}
+  table{border-collapse:collapse;width:100%;margin-top:10px}
+  th,td{border:1px solid var(--border);padding:6px 8px;font-size:13px;text-align:left}
+  th{background:var(--card)}
+  .edge{background:#FFF6E9;border:1px solid #F0D9A6;border-radius:8px;padding:10px 14px;margin:12px 0;font-size:13px}
+  .xmlbtn{font-size:11px;color:var(--blue);cursor:pointer;text-decoration:underline}
+  pre{background:var(--navy);color:#CFE0FA;padding:12px;border-radius:8px;overflow:auto;font-size:11px;max-height:400px}
+  .muted{color:var(--muted)}
+  .msg{display:flex;gap:12px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin:8px 0;background:#fff}
+  .msg .icon{width:34px;height:34px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+  .msg.clean .icon{background:#E4F6EE} .msg.open .icon{background:#FDEEDC}
+  .msg .body{flex:1} .msg .title{font-weight:700;font-size:13px;margin-bottom:2px}
+  .msg .summary{font-size:13px;color:var(--ink)} .msg .meta{font-size:11px;color:var(--muted);margin-top:4px}
+  .newbtn{display:block;width:calc(100% - 32px);margin:12px 16px;padding:9px;background:var(--blue);color:#fff;border:0;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer}
+  .form{padding:14px 16px;border-bottom:1px solid var(--border);background:var(--card)}
+  .form label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px}
+  .form input,.form select,.form textarea{width:100%;padding:7px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-top:2px;font-family:inherit}
+  .form textarea{font-family:monospace;font-size:11px;height:90px}
+  .row2{display:flex;gap:8px} .row2>div{flex:1}
+  .section label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px}
+  .section input{width:100%;padding:7px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-top:2px;font-family:inherit}
+  .form button.primary{margin-top:10px;background:var(--blue);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-weight:700;font-size:12px;cursor:pointer}
+  .form .err{color:#C0473C;font-size:12px;margin-top:6px}
+  .section{border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin:12px 0;background:#FAFBFE}
+  .section h4{margin:0 0 8px;font-size:13px}
+  .uploadbtn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;background:var(--blue);color:#fff;border-radius:6px;font-weight:700;font-size:13px;cursor:pointer;margin-top:4px}
+  .uploadbtn:hover{opacity:0.92}
+  .uploadbtn.disabled{opacity:0.6;cursor:default}
+  .uploadbtn input{display:none}
+  .hint{font-size:11px;color:var(--muted);margin-top:6px}
+  @media (max-width: 700px) {
+    main{grid-template-columns:1fr}
+    .list{border-right:none;border-bottom:1px solid var(--border);max-height:280px}
+    .row2{flex-direction:column}
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+function App() {
+  const [clients, setClients] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [batch, setBatch] = useState(null);
+  const [xml, setXml] = useState(null);
+  const [writeBacks, setWriteBacks] = useState([]);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newClient, setNewClient] = useState({ name: "", piva: "", ateco: "", regime: "ordinaria", sourceFormat: "json", period: "2026-Q3" });
+  const [newClientErr, setNewClientErr] = useState(null);
+  const [docMsg, setDocMsg] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [newAccount, setNewAccount] = useState({ code: "", name: "", rate: "", natura: "" });
+  const [acctMsg, setAcctMsg] = useState(null);
+
+  const refreshClients = () => fetch("/api/clients").then(r => r.json()).then(setClients);
+  useEffect(() => { refreshClients(); }, []);
+
+  const refreshWriteBacks = (id) => fetch(`/api/clients/${id}/writeback`).then(r => r.json()).then(setWriteBacks);
+  const refreshDetail = (id) => {
+    fetch(`/api/clients/${id}`).then(r => r.json()).then(setDetail);
+    fetch(`/api/clients/${id}/batch`).then(r => r.json()).then(setBatch);
+  };
+
+  useEffect(() => {
+    if (!selectedId) return;
+    setXml(null); setDocMsg(null); setAcctMsg(null);
+    setNewAccount({ code: "", name: "", rate: "", natura: "" });
+    refreshDetail(selectedId);
+    refreshWriteBacks(selectedId);
+    // Agent Desk writes back from a separate process — poll so a write-back
+    // that arrives while this page is open actually shows up without a manual refresh.
+    const id = setInterval(() => refreshWriteBacks(selectedId), 3000);
+    return () => clearInterval(id);
+  }, [selectedId]);
+
+  const showXml = (lineId) => {
+    fetch(`/api/clients/${selectedId}/invoices/${lineId}/xml`).then(r => r.text()).then(setXml);
+  };
+
+  const submitNewClient = async () => {
+    setNewClientErr(null);
+    const res = await fetch("/api/clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(newClient) });
+    const data = await res.json();
+    if (!data.ok) { setNewClientErr(data.error); return; }
+    setShowNewForm(false);
+    setNewClient({ name: "", piva: "", ateco: "", regime: "ordinaria", sourceFormat: "json", period: "2026-Q3" });
+    await refreshClients();
+    setSelectedId(data.client.id);
+  };
+
+  const submitPdf = (file) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result.split(",")[1];
+      const res = await fetch(`/api/clients/${selectedId}/attachments`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, contentBase64: base64, kind: "supporting_document" }),
+      });
+      const data = await res.json();
+      setUploading(false);
+      setDocMsg(!data.ok ? "Error: " + data.error
+        : data.line ? `Attached ${file.name} (docId ${data.docId}) — read as invoice line ${data.line.id} (${data.line.supplier}).`
+        : `Attached ${file.name} (docId ${data.docId}) — stored as supporting evidence only, no invoice text recognised.`);
+      refreshDetail(selectedId);
+      refreshClients();
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const submitParsedDocument = (file, format) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const res = await fetch(`/api/clients/${selectedId}/documents`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format, content: reader.result }),
+      });
+      const data = await res.json();
+      setUploading(false);
+      if (!data.ok) { setDocMsg("Error: " + data.error); return; }
+      setDocMsg(format === "csv" ? `Added ${data.added.length} line(s) from ${file.name}.` : `Added line ${data.line.id} (${data.line.supplier}) from ${file.name}.`);
+      refreshDetail(selectedId);
+      refreshClients();
+    };
+    reader.readAsText(file);
+  };
+
+  // One button, three accepted formats — the extension decides how the file
+  // gets parsed: XML/CSV go through the real line-parsing endpoint, PDF
+  // through the attachment endpoint (supporting evidence, not a line).
+  const handleFileUpload = (file) => {
+    setDocMsg(null);
+    const ext = file.name.split(".").pop().toLowerCase();
+    if (!["xml", "csv", "pdf"].includes(ext)) {
+      setDocMsg(`Error: "${file.name}" isn't a supported file type — upload .xml, .csv, or .pdf.`);
+      return;
+    }
+    setUploading(true);
+    if (ext === "pdf") submitPdf(file);
+    else submitParsedDocument(file, ext);
+  };
+
+  const submitAccount = async () => {
+    setAcctMsg(null);
+    const body = {
+      code: newAccount.code.trim(), name: newAccount.name.trim() || undefined,
+      rate: newAccount.rate.trim() === "" ? null : Number(newAccount.rate),
+      natura: newAccount.natura.trim() || null,
+    };
+    const res = await fetch(`/api/clients/${selectedId}/accounts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.ok) { setAcctMsg("Error: " + data.error); return; }
+    setAcctMsg(`Added account ${body.code}.`);
+    setNewAccount({ code: "", name: "", rate: "", natura: "" });
+    refreshDetail(selectedId);
+  };
+
+  return (<div>
+    <header><span className="logo">TeamSystem <span style={{color:"var(--blue)"}}>Firm</span></span>
+      <small>mock </small></header>
+    <main>
+      <div className="list">
+        <button className="newbtn" onClick={() => setShowNewForm(s => !s)}>{showNewForm ? "Cancel" : "+ New client"}</button>
+        {showNewForm && (
+          <div className="form">
+            <label>Name</label>
+            <input value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} placeholder="e.g. Nuovo Cliente Srl" />
+            <div className="row2">
+              <div><label>Partita IVA</label><input value={newClient.piva} onChange={e => setNewClient({...newClient, piva: e.target.value})} placeholder="11 digits" /></div>
+              <div><label>ATECO</label><input value={newClient.ateco} onChange={e => setNewClient({...newClient, ateco: e.target.value})} placeholder="e.g. 46.90.00" /></div>
+            </div>
+            <div className="row2">
+              <div><label>Regime</label>
+                <select value={newClient.regime} onChange={e => setNewClient({...newClient, regime: e.target.value})}>
+                  <option value="ordinaria">ordinaria</option><option value="forfettario">forfettario</option>
+                </select></div>
+              <div><label>Source format</label>
+                <select value={newClient.sourceFormat} onChange={e => setNewClient({...newClient, sourceFormat: e.target.value})}>
+                  <option value="json">json</option><option value="xml">xml</option><option value="csv">csv</option>
+                </select></div>
+            </div>
+            <label>Period</label>
+            <input value={newClient.period} onChange={e => setNewClient({...newClient, period: e.target.value})} placeholder="2026-Q3" />
+            {newClientErr && <div className="err">{newClientErr}</div>}
+            <button className="primary" onClick={submitNewClient}>Create client</button>
+          </div>
+        )}
+        {clients.map(c => (
+          <div key={c.id} className={"row" + (c.id===selectedId?" active":"")} onClick={() => setSelectedId(c.id)}>
+            <b>{c.name}</b>
+            <small>{c.regime} · {c.ateco} · {c.lineCount} line(s)</small>
+          </div>
+        ))}
+      </div>
+      <div className="detail">
+        {!detail && <p className="muted">Select a client to see their master data, chart of accounts, and this quarter's VAT batch.</p>}
+        {detail && (<div>
+          <h2>{detail.name}</h2>
+          <span className="badge">P.IVA {detail.piva}</span>
+          <span className="badge">{detail.regime}</span>
+          <span className="badge">ATECO {detail.ateco}</span>
+          {detail.vatGroup && <span className="badge">VAT Group member</span>}
+          {detail.edgeCase && <div className="edge"><b>What this client demonstrates:</b> {detail.edgeCase}</div>}
+
+          <h3>Messages from Agent Desk</h3>
+          {writeBacks.length === 0
+            ? <p className="muted">No filing updates yet — run a validation for this client in Agent Desk, then check back here (this refreshes automatically).</p>
+            : writeBacks.slice().reverse().map((w,i) => {
+                const clean = (w.anomalyCount ?? 0) === 0 && (w.tailCount ?? 0) === 0;
+                return (
+                  <div className={"msg " + (clean ? "clean" : "open")} key={i}>
+                    <div className="icon">{clean ? "✅" : "📨"}</div>
+                    <div className="body">
+                      <div className="title">Filing update — period {w.period}</div>
+                      <div className="summary">{w.summary || w.status}</div>
+                      <div className="meta">
+                        {w.deadline && <>Deadline: <b>{w.deadline}</b> · </>}
+                        Received {w.at}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+          <h3>Chart of accounts</h3>
+          <table><thead><tr><th>Code</th><th>Name</th><th>Rate</th><th>Natura</th></tr></thead>
+          <tbody>{detail.chartOfAccounts.map(c => (
+            <tr key={c.code}><td>{c.code}</td><td>{c.name}</td><td>{c.rate}%</td><td>{c.natura || "—"}</td></tr>
+          ))}</tbody></table>
+          {detail.chartOfAccounts.length === 0 && <p className="muted">No accounts yet — add one below so rate/category checks have something to validate against.</p>}
+
+          <div className="section">
+            <h4>Add account</h4>
+            <div className="row2">
+              <div><label>Code</label><input value={newAccount.code} onChange={e => setNewAccount({...newAccount, code: e.target.value})} placeholder="e.g. 60.10" /></div>
+              <div><label>Name</label><input value={newAccount.name} onChange={e => setNewAccount({...newAccount, name: e.target.value})} placeholder="e.g. Consulenze e servizi" /></div>
+            </div>
+            <div className="row2">
+              <div><label>Rate (%)</label><input value={newAccount.rate} onChange={e => setNewAccount({...newAccount, rate: e.target.value})} placeholder="e.g. 22" /></div>
+              <div><label>Natura (if rate is 0)</label><input value={newAccount.natura} onChange={e => setNewAccount({...newAccount, natura: e.target.value})} placeholder="e.g. N6.7" /></div>
+            </div>
+            {acctMsg && <div className={acctMsg.startsWith("Error") ? "err" : "meta"} style={{marginTop:8}}>{acctMsg}</div>}
+            <button className="primary" onClick={submitAccount} disabled={!newAccount.code.trim()}>Add account</button>
+          </div>
+
+          <h3>VAT batch — {batch?.period}</h3>
+          <table><thead><tr><th>ID</th><th>Supplier</th><th>Desc</th><th>Net</th><th>VAT</th><th>Account</th><th>Conf.</th><th></th></tr></thead>
+          <tbody>{batch?.lines.map(l => (
+            <tr key={l.id}>
+              <td>{l.id}</td><td>{l.supplier}</td><td>{l.desc}</td>
+              <td>€{l.net}</td><td>€{l.vat}</td><td>{l.account || "—"}</td><td>{l.confidence}</td>
+              <td><span className="xmlbtn" onClick={() => showXml(l.id)}>view XML</span></td>
+            </tr>
+          ))}</tbody></table>
+
+          {batch?.expected.length > 0 && (<div>
+            <h3>Expected but not received</h3>
+            <table><thead><tr><th>Type</th><th>Supplier</th><th>Note</th></tr></thead>
+            <tbody>{batch.expected.map((e,i) => (
+              <tr key={i}><td>{e.docType}</td><td>{e.supplier}</td><td>{e.note}</td></tr>
+            ))}</tbody></table>
+          </div>)}
+
+          {detail.attachments && detail.attachments.length > 0 && (<div>
+            <h3>Attachments</h3>
+            <table><thead><tr><th>Doc ID</th><th>Kind</th><th>Line</th><th></th></tr></thead>
+            <tbody>{detail.attachments.map((a,i) => (
+              <tr key={i}><td>{a.docId}</td><td>{a.kind}</td><td>{a.lineId || "—"}</td>
+                <td><a className="xmlbtn" href={`/api/clients/${selectedId}/attachments/${a.docId}`} target="_blank">open PDF</a></td></tr>
+            ))}</tbody></table>
+          </div>)}
+
+          {xml && (<div><h3>FatturaPA-shaped XML</h3><pre>{xml}</pre></div>)}
+
+          <div className="section">
+            <h4>Add documents</h4>
+            <p className="muted" style={{marginTop:0}}>Upload a FatturaPA-shaped XML invoice, a CSV feed, or a text-based invoice PDF — each is parsed for real and appended as a new line where recognised. A PDF that isn't a recognised invoice layout is still saved as supporting evidence.</p>
+            <label className={"uploadbtn" + (uploading ? " disabled" : "")}>
+              {uploading ? "Uploading…" : "Upload file"}
+              <input type="file" accept=".xml,.csv,.pdf,application/pdf,text/csv,application/xml,text/xml"
+                     disabled={uploading}
+                     onChange={e => { if (e.target.files[0]) handleFileUpload(e.target.files[0]); e.target.value = ""; }} />
+            </label>
+            <div className="hint">Accepts .xml, .csv, or .pdf</div>
+            {docMsg && <div className={docMsg.startsWith("Error") ? "err" : "meta"} style={{marginTop:8}}>{docMsg}</div>}
+          </div>
+        </div>)}
+      </div>
+    </main>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
