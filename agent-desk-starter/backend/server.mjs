@@ -16,6 +16,8 @@ import {
   answerEmployeeQuestion, trackDeadline, askStudio,
 } from "./lAmministrativo.mjs";
 import { onLadderEvent as onClassificationLadderEvent } from "./classificationGate.mjs";
+import { route } from "./smistatore.mjs";
+import { rosterFixture } from "./fixtures/roster.fixture.mjs";
 
 // Bridge both L'Amministrativo's (owner-approval, WhatsApp-facing) and Il
 // Classificatore's (studio-internal) reminder/escalation ladders onto the
@@ -35,6 +37,38 @@ function bridgeLadderEvent(e, remindPhrase) {
 function feedFromLadder(e, suffix, tone) {
   publish("feed", { agent: e.seat || "l_amministrativo", text: `${e.kind === "gate" ? "Gate" : "Document request"} ${suffix}`, tone });
 }
+
+// Bridge Lo Smistatore onto the bus: every already-signed a2a message
+// addressed to it gets routed live, and the decision is published so the
+// frontend can show it. Doesn't touch vatFilingPath.mjs or lAmministrativo.mjs —
+// both already publish "a2a" events with a real `to`, this just reacts to them.
+// >>> TODO (real): rosterFixture is a placeholder (see backend/fixtures/roster.fixture.mjs)
+//     until there's a real staff directory; swap the import, nothing else changes.
+subscribe((e) => {
+  if (e.channel !== "a2a" || !e.message || e.message.to !== "lo_smistatore") return;
+  try {
+    const result = route(e.message, rosterFixture);
+    publish("routing", result);
+    if (result.kind === "routed_task") {
+      publish("feed", {
+        agent: "lo_smistatore",
+        text: `Routed ${result.sourceMessageType} (${result.client}) to ${result.owner}` +
+              `${result.escalated ? ` — escalated to tier ${result.escalationTier}` : ""}.`,
+        tone: result.escalated ? "warn" : "info",
+      });
+    } else {
+      publish("feed", {
+        agent: "lo_smistatore",
+        text: `Could not route ${result.sourceMessageType} for ${result.client} — ${result.reason}.`,
+        tone: "warn",
+      });
+    }
+  } catch (err) {
+    // A malformed message or an unknown roster shape should never crash the
+    // server — surface it on the feed instead, same as any other agent failure.
+    publish("feed", { agent: "lo_smistatore", text: `Routing failed: ${err.message}`, tone: "warn" });
+  }
+});
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pub = join(here, "..", "frontend");
