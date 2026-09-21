@@ -49,7 +49,7 @@
     else if (view === "agent") content = h(AgentPage, { initialSeat: selectedSeat, onSeatChange: setSelectedSeat });
     else if (view === "stream") content = h(A2AStream, { messages: ev.a2a });
     else if (view === "board") content = h(Board, { board: ev.board, feed: ev.feed });
-    else if (view === "memory") content = h(Memory, { evidence: ev.evidence, knowledge: ev.knowledge, coa: ev.coa });
+    else if (view === "memory") content = h(Memory, { evidence: ev.evidence, knowledge: ev.knowledge, coa: ev.coa, routing: ev.routing });
     else if (view === "approvals") content = h(Approvals, { ladderEvents: ev.ladder });
 
     return h("div", { className: "app-shell" },

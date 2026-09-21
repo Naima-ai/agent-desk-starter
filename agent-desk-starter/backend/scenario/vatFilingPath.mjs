@@ -132,7 +132,14 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
       publish("board", { step: "flagged", label: `Problem found — ${describeAnomaly(an)}` });
       const ev = evidence.put({ kind: "anomaly", ruleId: an.ruleId, detail: an, period });
       publish("evidence", { record: ev });
-      feed("lo_smistatore", "Correction request queued for the client (template 9.2 — request for correction).", "info");
+      // A real, routed A2A message — was previously just a narrated feed
+      // line ("Correction request queued...") that never actually called
+      // Lo Smistatore's route(). server.mjs's bus subscriber picks this up
+      // (any a2a message addressed to lo_smistatore) and publishes the real
+      // routing decision + its own feed line, so no separate feed() call is
+      // needed here for that part.
+      a2a({ type: "correction_request", from: "l_addetto_iva", to: "lo_smistatore", client: vatBatch.client,
+            ruleId: an.ruleId, message: describeAnomaly(an), period });
       await wait(600);
       continue;
     }

@@ -19,6 +19,7 @@ import {
 import { onLadderEvent as onClassificationLadderEvent } from "./classificationGate.mjs";
 import { route } from "./smistatore.mjs";
 import { rosterFixture } from "./fixtures/roster.fixture.mjs";
+import * as archivista from "./archivista.mjs";
 
 // Bridge both L'Amministrativo's (owner-approval, WhatsApp-facing) and Il
 // Classificatore's (studio-internal) reminder/escalation ladders onto the
@@ -70,6 +71,22 @@ subscribe((e) => {
     publish("feed", { agent: "lo_smistatore", text: `Routing failed: ${err.message}`, tone: "warn" });
   }
 });
+
+// L'Archivista's confidence decay — its job.txt says a confirmed rule should
+// lose trust if it's never re-verified. decayConfidence() existed but
+// nothing ever called it, so a rule stayed at 0.98 confidence forever no
+// matter how stale. Runs once at startup (catches anything already stale
+// across a restart) and once a day after that — decay itself is keyed off
+// each rule's own `lastVerified` age, not this interval, so the exact
+// cadence here doesn't need to be fast to be correct.
+function runConfidenceDecay() {
+  const decayed = archivista.decayConfidence();
+  for (const rec of decayed) {
+    publish("knowledge", { record: rec, note: `Confidence decayed to ${rec.confidence} — not re-verified in over 90 days.` });
+  }
+}
+runConfidenceDecay();
+setInterval(runConfidenceDecay, 24 * 60 * 60 * 1000);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pub = join(here, "..", "frontend");

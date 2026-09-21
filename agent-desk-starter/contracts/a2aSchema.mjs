@@ -1,7 +1,7 @@
 // contracts/a2aSchema.mjs
 // -------------------------------------------------------------------
 // THE CONTRACT (2 of 2): the typed A2A domain schema.
-// A2A carries the task; THIS defines its meaning. Only these 8 message
+// A2A carries the task; THIS defines its meaning. Only these 9 message
 // types may cross the agent-to-agent boundary. No free text.
 // -------------------------------------------------------------------
 import { z } from "zod";
@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 export const A2A_TYPES = [
   "pack_delivered", "document_delivered", "item_missing",
   "question_for_studio", "instruction_from_studio", "answer_with_evidence",
-  "escalation_requested", "acknowledgment",
+  "escalation_requested", "acknowledgment", "correction_request",
 ];
 
 const Base = {
@@ -27,6 +27,12 @@ export const A2AMessageSchema = z.discriminatedUnion("type", [
   z.object({ ...Base, type: z.literal("answer_with_evidence"), answer: z.string(), evidenceId: z.string() }),
   z.object({ ...Base, type: z.literal("escalation_requested"), reason: z.string() }),
   z.object({ ...Base, type: z.literal("acknowledgment"), ref: z.string() }),
+  // l_addetto_iva -> lo_smistatore: a VAT-rule anomaly (bad rate, bad P.IVA,
+  // missing evidence, ...) that the client needs to fix, per L'Addetto
+  // IVA's own job description ("route each anomaly through Lo Smistatore") —
+  // added because this was previously just a narrated feed message, never
+  // an actual routed A2A message.
+  z.object({ ...Base, type: z.literal("correction_request"), ruleId: z.string(), message: z.string(), period: z.string() }),
 ]);
 
 // Signing stub — REPLACE with real asymmetric signing in production.

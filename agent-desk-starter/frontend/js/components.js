@@ -362,8 +362,8 @@
       count === 0 ? h(EmptyState, null, "Nothing here yet.") : h("div", { className: "mem-body" }, children));
   }
 
-  function Memory({ evidence, knowledge, coa }) {
-    if (evidence.length === 0 && knowledge.length === 0 && coa.length === 0) {
+  function Memory({ evidence, knowledge, coa, routing }) {
+    if (evidence.length === 0 && knowledge.length === 0 && coa.length === 0 && routing.length === 0) {
       return h(EmptyState, null, "Nothing recorded yet \u2014 run the demo to populate the evidence and knowledge stores.");
     }
 
@@ -401,6 +401,11 @@
     const evidenceRow = (e, i) => h("div", { className: "ledger-row", key: i },
       h("span", { className: "hash" }, `${e.record.id} \u00b7 ${e.record.hash}  `), JSON.stringify(e.record));
 
+    const routingRow = (e, i) => h("div", { className: "ledger-row", key: "rt" + i },
+      e.kind === "routed_task"
+        ? `${e.client}: ${e.sourceMessageType} \u2192 ${e.owner}${e.escalated ? ` \u2014 escalated to tier ${e.escalationTier}` : ""}`
+        : `${e.client}: ${e.sourceMessageType} \u2192 ESCALATED (${e.reason}, tried tiers ${JSON.stringify(e.triedTiers)})`);
+
     const leftPanel = h("div", { className: "panel", style: { display: "flex", flexDirection: "column", gap: 14 } },
       h(MemSection, {
         title: "Learned classification rules", count: archivistRules.length, defaultOpen: true,
@@ -427,7 +432,11 @@
       h(MemSection, {
         title: "Evidence store", count: generalEvidence.length, defaultOpen: true,
         desc: "Immutable, append-only proof that something happened \u2014 a document received, a human asked to confirm a classification, an invoice approved. Never edited or deleted, only added to.",
-      }, generalEvidence.map(evidenceRow)));
+      }, generalEvidence.map(evidenceRow)),
+      h(MemSection, {
+        title: "Lo Smistatore \u2014 routing decisions", count: routing.length,
+        desc: "Every typed message addressed to Lo Smistatore and who it decided owns it, by competence + client ownership + availability \u2014 real decisions, not narrated. \"Every routing is human-overridable\" per its job description; there's no override control built yet, this section only makes the decisions visible.",
+      }, routing.map(routingRow)));
 
     return h("div", { className: "memory-grid" }, leftPanel, rightPanel);
   }

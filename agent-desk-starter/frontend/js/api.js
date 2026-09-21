@@ -31,7 +31,7 @@
   // Subscribes once, buckets every event by its channel, and reports whether
   // the connection is currently live so the UI can show it honestly.
   function useBus() {
-    const [ev, setEv] = useState({ a2a: [], feed: [], board: [], evidence: [], knowledge: [], coa: [], gate: [], ladder: [] });
+    const [ev, setEv] = useState({ a2a: [], feed: [], board: [], evidence: [], knowledge: [], coa: [], gate: [], ladder: [], routing: [] });
     const [live, setLive] = useState(false);
     useEffect(() => {
       const es = new EventSource("/events");
