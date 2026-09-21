@@ -258,7 +258,7 @@
             placeholder: "es. Recupera i documenti mancanti per il periodo; se non li trovi, chiedi al titolare su WhatsApp\u2026",
             value: jobText, onChange: (e) => setJobText(e.target.value),
           }),
-          h("p", { className: "hint" }, "Leave blank to compile the seat\u2019s real job description on file. The NL\u2192manifest step itself is still mocked \u2014 the manifest stays the pre-written one \u2014 but the text here drives the compiled skill doc below."),
+          h("p", { className: "hint" }, "Leave blank to compile the seat\u2019s real job description on file. The NL\u2192manifest step genuinely calls the model gateway (edge SLM \u2192 cloud fallback \u2192 a deterministic offline heuristic if neither is reachable, which is what runs without a local model server configured) \u2014 the manifest below reflects whichever of those actually answered."),
           h("button", { className: "btn-primary", onClick: compile, disabled: busy }, busy ? "Compiling\u2026" : "Compile")),
         h("div", { className: "panel" },
           error && h("div", { className: "error-banner" }, error),

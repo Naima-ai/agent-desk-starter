@@ -52,8 +52,16 @@ export async function parseJobTextToManifest(jobText, fallbackSeatId = null) {
       }
 
       if (parsed) {
-        // If parsing natural language missed seat name, preserve the target seatId
-        if (!parsed.seat && fallbackSeatId) {
+        // The caller always knows which seat it's compiling (both call sites
+        // below pass it) — that's more authoritative than whatever the model
+        // says, so it always wins, not just when the model left `seat` blank.
+        // Found for real: modelGateway.mjs's OFFLINE fallback (no local SLM,
+        // no cloud key — the default in this dev environment) always returns
+        // a hardcoded manifest shaped for "l_addetto_iva" regardless of which
+        // seat asked, so compiling e.g. "l_amministrativo" silently returned
+        // l_addetto_iva's manifest instead — `!parsed.seat` never caught it
+        // because the fallback DOES set a (wrong) seat.
+        if (fallbackSeatId) {
           parsed.seat = fallbackSeatId;
         }
         return validateManifest(parsed);
