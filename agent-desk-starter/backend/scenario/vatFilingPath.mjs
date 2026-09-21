@@ -70,7 +70,7 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
 
   // 3 — Solve the low-confidence tail (pre-fill): Il Classificatore.
   for (const line of tail) {
-    const r = classifyLine(line, vatBatch.client);
+    const r = await classifyLine(line, vatBatch.client, chartOfAccounts);
     publish("coa", { supplier: line.supplier, account: r.account, confidence: r.confidence, options: chartOfAccounts });
     feed("il_classificatore", `Tail line ${line.id} (${line.supplier}) -> account ${r.account} @ conf ${r.confidence}.`);
     await wait(500);
