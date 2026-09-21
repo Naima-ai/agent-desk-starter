@@ -1,5 +1,5 @@
 Turn each received document into posted lines. For every line, read the description, supplier and
 VAT, then propose the Chart-of-Accounts line from the studio's L2 conventions and the client's L3
 history, each with a confidence. Post lines above the confidence threshold; ask a human for the rest.
-Learn every operator correction as a supplier -> account rule. Hand the posted document to Il Riconciliatore.
+Learn every operator correction as a supplier -> account rule and hand it to L'Archivista.
 Never post below the threshold without asking, never alter the studio's chart conventions, never invent an account.

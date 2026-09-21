@@ -92,9 +92,15 @@ export async function classifyLine(line, clientId, coa = fixtureChartOfAccounts)
         parsed = rawResult;
       }
 
-      if (parsed && parsed.account && typeof parsed.confidence === "number") {
-        const matched = coa.find((c) => c.code === parsed.account);
-        const accountCode = matched ? matched.code : parsed.account;
+      // "never invent an account" (il_classificatore.job.txt) is a hard
+      // constraint, not a suggestion — a model naming a code that isn't
+      // actually in this client's chart of accounts must be treated as an
+      // unusable answer (fall through to the keyword heuristic below,
+      // which only ever returns codes that genuinely exist in `coa`), not
+      // silently accepted as if it were real.
+      const matched = coa.find((c) => c.code === parsed?.account);
+      if (parsed && matched && typeof parsed.confidence === "number") {
+        const accountCode = matched.code;
         const confidence = Math.min(1.0, Math.max(0.0, parsed.confidence));
 
         return {
@@ -112,9 +118,14 @@ export async function classifyLine(line, clientId, coa = fixtureChartOfAccounts)
     }
   }
 
-  // 3. Deterministic Heuristic Fallback
+  // 3. Deterministic Heuristic Fallback. Same "never invent an account"
+  // constraint applies here — KEYWORDS is a fixed studio-wide list and has
+  // no idea whether ITS codes exist in THIS client's actual chart (a
+  // narrow chart, e.g. a forfettario or esente client, legitimately might
+  // not carry "60.10" at all), so a keyword hit only counts if the client's
+  // own chart confirms that code is real.
   const lowerDesc = desc.toLowerCase();
-  const hit = KEYWORDS.find(([k]) => lowerDesc.includes(k));
+  const hit = KEYWORDS.find(([k, code]) => lowerDesc.includes(k) && coa.some((c) => c.code === code));
   const account = hit ? hit[1] : (coa[0]?.code || "60.10");
   const confidence = hit ? 0.7 : 0.4;
 
