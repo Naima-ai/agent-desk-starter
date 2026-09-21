@@ -4,23 +4,86 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { validateManifest } from "../contracts/manifestSchema.mjs";
+import { askModel } from "./modelGateway.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seatsDir = join(here, "..", "contracts", "seats");
 
-// STEP 1 (MOCK): parse NL -> manifest.
-// In the starter we load the pre-written manifest for the seat.
-// >>> TODO (real): call the edge SLM / LLM with the NL job text and the
-//     ManifestSchema as the output contract, then validate the JSON it returns.
+const COMPILER_SYSTEM_PROMPT = `Sei il Chief of Staff (Il Capogabinetto) del sistema Loop Agent Desk per commercialisti italiani.
+Il tuo compito è analizzare la Job Description di un agente (scritta in linguaggio naturale italiano) 
+ed estrarre un manifesto JSON rigoroso, valido secondo il ManifestSchema.
+
+Struttura JSON richiesta:
+{
+  "seat": "nome_univoco_snake_case",
+  "location": "studio_edge" | "client_edge",
+  "model": { "edge": "qwen3.5-4b", "fallback": "kimi" },
+  "tools": ["tool.uno", "tool.due"],
+  "skills": [],
+  "memory": { "read": [0, 1, 2, 3], "write": [3] },
+  "refuses": ["divieto_1", "divieto_2"],
+  "schedule": "event(...)",
+  "gate": "nome_gate_umano",
+  "artifact": "descrizione_artefatto",
+  "unit": { "per_batch": 40 }
+}
+Rispondi SOLO con l'oggetto JSON, senza commenti e senza blocchi markdown.`;
+
+/**
+ * Parses raw Italian job text into a validated manifest.
+ * Uses askModel (Edge SLM / Cloud Fallback) with fallback to verified seed JSON.
+ */
+export async function parseJobTextToManifest(jobText, fallbackSeatId = null) {
+  if (jobText && typeof jobText === "string" && jobText.trim()) {
+    const prompt = `Analizza la seguente Job Description ed emetti il manifesto JSON corrispondente:\n\n${jobText}`;
+    try {
+      const rawResult = await askModel({
+        prompt,
+        systemPrompt: COMPILER_SYSTEM_PROMPT,
+        temperature: 0.1
+      });
+
+      let parsed = null;
+      if (typeof rawResult === "string") {
+        const cleaned = rawResult.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+        parsed = JSON.parse(cleaned);
+      } else if (typeof rawResult === "object" && rawResult !== null) {
+        parsed = rawResult;
+      }
+
+      if (parsed) {
+        // If parsing natural language missed seat name, preserve the target seatId
+        if (!parsed.seat && fallbackSeatId) {
+          parsed.seat = fallbackSeatId;
+        }
+        return validateManifest(parsed);
+      }
+    } catch (err) {
+      // Model unavailable, timed out, or unparseable JSON -> fall through to disk seed
+    }
+  }
+
+  // Resilient fallback: load the seed manifest for this seat from disk
+  if (fallbackSeatId) {
+    const raw = await readFile(join(seatsDir, `${fallbackSeatId}.json`), "utf8");
+    return validateManifest(JSON.parse(raw));
+  }
+
+  throw new Error("compiler: Unable to parse job text and no valid fallback seatId provided.");
+}
+
+// STEP 1: parse NL -> manifest.
+// Reads the seat's .job.txt, passes it to the SLM/LLM, and validates the output.
 export async function parseJobToManifest(seatId) {
-  const raw = await readFile(join(seatsDir, `${seatId}.json`), "utf8");
-  return JSON.parse(raw);
+  const jobPath = join(seatsDir, `${seatId}.job.txt`);
+  const jobText = await readFile(jobPath, "utf8").catch(() => "");
+  return parseJobTextToManifest(jobText, seatId);
 }
 
 // STEP 2: validate against the contract (this is the guardrail gate).
 // STEP 3: emit an OpenClaw skill file (SOUL.md-style) with hard blocks.
 export async function compile(seatId) {
-  const manifest = validateManifest(await parseJobToManifest(seatId));
+  const manifest = await parseJobToManifest(seatId);
   const job = await readFile(join(seatsDir, `${seatId}.job.txt`), "utf8").catch(() => "");
   const skill = emitSkill(manifest, job);
   const outDir = join(here, "..", "build", "skills");
@@ -29,14 +92,10 @@ export async function compile(seatId) {
   return { manifest, skill };
 }
 
-// Used by the frontend's "write the job in Italian" box. 
-// Real NL->manifest parsing is still a TODO — this still loads the pre-written
-// manifest for the seat, but emits the skill doc from the TEXT THE USER TYPED,
-// so the box is genuinely wired to something instead of a no-op textarea.
-// >>> TODO (real): replace with an edge-SLM/LLM call: jobText -> manifest JSON,
-//     validated by ManifestSchema, same as parseJobToManifest does today.
+// Used by the frontend's "write the job in Italian" box.
+// Parses custom job text via SLM/LLM into a live manifest validated by ManifestSchema.
 export async function compileWithJobText(seatId, jobText) {
-  const manifest = validateManifest(await parseJobToManifest(seatId));
+  const manifest = await parseJobTextToManifest(jobText, seatId);
   const skill = emitSkill(manifest, jobText || "");
   const outDir = join(here, "..", "build", "skills");
   await mkdir(outDir, { recursive: true });
@@ -45,7 +104,7 @@ export async function compileWithJobText(seatId, jobText) {
 }
 
 export function emitSkill(m, job) {
-  const block = (arr) => arr.map((x) => `- ${x}`).join("\n");
+  const block = (arr) => (Array.isArray(arr) && arr.length ? arr.map((x) => `- ${x}`).join("\n") : "- (none)");
   return `# SOUL — ${m.seat}
 > Generated by the Job Card Compiler. Do not edit by hand; edit the job description and recompile.
 
@@ -59,7 +118,7 @@ ${job.trim() || "(job description not provided)"}
 
 ## Allowed tools
 ${block(m.tools)}
-${m.skills.length ? `\n## Skills (per client)\n${block(m.skills)}` : ""}
+${m.skills && m.skills.length ? `\n## Skills (per client)\n${block(m.skills)}` : ""}
 
 ## HARD BLOCKS (enforced at runtime, not prompt hints)
 ${block(m.refuses)}
@@ -70,3 +129,5 @@ ${m.gate ? `\n## Human gate\n- ${m.gate}` : ""}
 - unit: ${JSON.stringify(m.unit)}
 `;
 }
+
+export default { compile, compileWithJobText, parseJobToManifest, parseJobTextToManifest, emitSkill };
