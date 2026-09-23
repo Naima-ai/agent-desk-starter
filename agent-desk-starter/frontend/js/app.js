@@ -26,12 +26,6 @@
     // or every few seconds regardless
     const pendingCount = usePendingCount(ev.gate.length + ev.ladder.length);
 
-    const onRunDemo = async () => {
-      setLastRunClientId("rossi_srl");
-      setRunning(true);
-      try { await runDemo(); } finally { setTimeout(() => setRunning(false), 4000); }
-    };
-
     const onValidateClient = async (clientId) => {
       setLastRunClientId(clientId);
       setRunning(true);
@@ -53,7 +47,7 @@
     else if (view === "approvals") content = h(Approvals, { ladderEvents: ev.ladder });
 
     return h("div", { className: "app-shell" },
-      h(Sidebar, { view, setView, pendingCount, onRunDemo, running }),
+      h(Sidebar, { view, setView, pendingCount }),
       h("main", { className: "main" },
         h("div", { className: "main-inner" },
           h(ViewHeader, { title: meta.title, description: meta.description, live }),

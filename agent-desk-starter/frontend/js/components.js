@@ -62,9 +62,9 @@
   }
 
   //  1. `.sidebar`          — desktop/tablet, collapsible to icon-only
-  //  2. `.mobile-header`     — phone only: brand + a compact Run demo
+  //  2. `.mobile-header`     — phone only: brand
   //  3. `.mobile-bottom-nav` — phone only: a real tab bar, o
-  function Sidebar({ view, setView, pendingCount, onRunDemo, running }) {
+  function Sidebar({ view, setView, pendingCount }) {
     const [collapsed, setCollapsed] = useState(readStoredCollapse);
     const toggle = () => { const next = !collapsed; setCollapsed(next); storeCollapse(next); };
 
@@ -73,11 +73,6 @@
         h("div", { className: "brand" },
           h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p"),
           !collapsed && h("div", { className: "brand-sub" }, "Agent Desk")),
-        h("button", {
-          className: "run-demo-btn", onClick: onRunDemo, disabled: running,
-          title: running ? "Running\u2026" : "Run demo", "aria-label": "Run demo",
-        },
-          h(Icon, { name: "play", size: 14 }), !collapsed && (running ? "Running\u2026" : "Run demo")),
         h("nav", { className: "side-nav" },
           NAV.map((n) => h("button", {
             key: n.id, className: `nav-item${view === n.id ? " active" : ""}`, onClick: () => setView(n.id),
@@ -97,11 +92,7 @@
           !collapsed && h("span", null, "Collapse"))),
 
       h("header", { className: "mobile-header" },
-        h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p"),
-        h("button", {
-          className: "run-demo-btn compact", onClick: onRunDemo, disabled: running,
-          "aria-label": "Run demo",
-        }, h(Icon, { name: "play", size: 13 }), running ? "Running\u2026" : "Run demo")),
+        h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p")),
 
       h("nav", { className: "mobile-bottom-nav" },
         NAV.map((n) => h("button", {
@@ -529,8 +520,6 @@
     if (!clients) return h(EmptyState, null, "Loading clients from the TeamSystem Firm mock…");
 
     return h("div", null,
-      h("p", { className: "muted", style: { marginBottom: 14 } },
-        `${clients.length} client(s) available from TeamSystem. Pick one to pull its real VAT batch through the full pipeline — TeamSystem → Fatture in Cloud cross-check → validation → the client loop.`),
       h("div", { className: "panel" },
         clients.map((c) => h("div", { className: "feed-row", key: c.id, style: { alignItems: "center" } },
           h("div", { style: { flex: 1 } },
