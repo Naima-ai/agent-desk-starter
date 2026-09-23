@@ -18,7 +18,7 @@ import {
 } from "./lAmministrativo.mjs";
 import { onLadderEvent as onClassificationLadderEvent } from "./classificationGate.mjs";
 import { route } from "./smistatore.mjs";
-import { rosterFixture } from "./fixtures/roster.fixture.mjs";
+import { getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry } from "./rosterStore.mjs";
 import * as archivista from "./archivista.mjs";
 
 // Bridge both L'Amministrativo's (owner-approval, WhatsApp-facing) and Il
@@ -44,12 +44,13 @@ function feedFromLadder(e, suffix, tone) {
 // addressed to it gets routed live, and the decision is published so the
 // frontend can show it. Doesn't touch vatFilingPath.mjs or lAmministrativo.mjs —
 // both already publish "a2a" events with a real `to`, this just reacts to them.
-// >>> TODO (real): rosterFixture is a placeholder (see backend/fixtures/roster.fixture.mjs)
-//     until there's a real staff directory; swap the import, nothing else changes.
+// getRoster() is read fresh on every message (not cached), so an edit made
+// through the Team page takes effect on the very next routed message —
+// no restart needed.
 subscribe((e) => {
   if (e.channel !== "a2a" || !e.message || e.message.to !== "lo_smistatore") return;
   try {
-    const result = route(e.message, rosterFixture);
+    const result = route(e.message, getRoster());
     publish("routing", result);
     if (result.kind === "routed_task") {
       publish("feed", {
@@ -179,6 +180,42 @@ const server = createServer(async (req, res) => {
     } catch (e) {
       res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
     }
+    return;
+  }
+
+  // ---- Lo Smistatore's real staff roster (Team page) — who's actually on
+  // the desk, what they're competent for, which clients they own, whether
+  // they're available. Replaces the hardcoded fixture route() used to read
+  // permanently; edits here take effect on the very next routed message. ----
+  if (url.pathname === "/api/roster" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(getRoster()));
+    return;
+  }
+  if (url.pathname === "/api/roster" && req.method === "POST") {
+    const body = await readBody(req);
+    try {
+      const entry = addRosterEntry(body ? JSON.parse(body) : {});
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(entry));
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
+    }
+    return;
+  }
+  const rosterMatch = url.pathname.match(/^\/api\/roster\/([^/]+)$/);
+  if (rosterMatch && req.method === "PATCH") {
+    const body = await readBody(req);
+    try {
+      const updated = updateRosterEntry(rosterMatch[1], body ? JSON.parse(body) : {});
+      if (!updated) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such roster entry" })); return; }
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(updated));
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
+    }
+    return;
+  }
+  if (rosterMatch && req.method === "DELETE") {
+    const ok = removeRosterEntry(rosterMatch[1]);
+    res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" }).end(JSON.stringify({ ok }));
     return;
   }
 

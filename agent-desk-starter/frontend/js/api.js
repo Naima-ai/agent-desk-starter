@@ -25,6 +25,7 @@
     answer_with_evidence:      { label: "answer with evidence",    bg: "#E7F0FD", fg: "#0A63E0" },
     escalation_requested:      { label: "escalation requested",    bg: "#FBEAE8", fg: "#C0473C" },
     acknowledgment:            { label: "acknowledgment",          bg: "#F6F8FC", fg: "#5B6B85" },
+    correction_request:        { label: "correction request",      bg: "#FBEAE8", fg: "#C0473C" },
   };
 
   // ---- SSE bus ---------------------------------------------------------------
@@ -81,6 +82,16 @@
     if (!r.ok) throw new Error(`${url} -> ${r.status}`);
     return r.json();
   }
+  async function patchJSON(url, body) {
+    const r = await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    return r.json();
+  }
+  async function deleteJSON(url) {
+    const r = await fetch(url, { method: "DELETE" });
+    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    return r.json();
+  }
 
   const runDemo               = (clientId) => getJSON(`/api/run-demo${clientId ? `?client=${encodeURIComponent(clientId)}` : ""}`);
   const getTsClients          = () => getJSON("/api/ts-clients");
@@ -91,6 +102,10 @@
   const resolveDocumentRequest = (id, sdiId) => postJSON(`/api/document-requests/${id}/resolve`, { sdiId });
   const getQuestions           = () => getJSON("/api/questions");
   const resolveQuestion        = (id, answer, evidenceId) => postJSON(`/api/questions/${id}/resolve`, { answer, evidenceId });
+  const getRoster               = () => getJSON("/api/roster");
+  const addRosterEntry          = (entry) => postJSON("/api/roster", entry);
+  const updateRosterEntry       = (id, patch) => patchJSON(`/api/roster/${encodeURIComponent(id)}`, patch);
+  const removeRosterEntry       = (id) => deleteJSON(`/api/roster/${encodeURIComponent(id)}`);
   const compileSeat = (seatId, jobText) =>
     jobText && jobText.trim() ? postJSON(`/api/compile/${seatId}`, { jobText }) : getJSON(`/api/compile/${seatId}`);
   const deliverPack = (clientId, period) => postJSON(`/api/deliver-pack/${encodeURIComponent(clientId)}/${encodeURIComponent(period)}`, {});
@@ -179,6 +194,7 @@
     useBus, usePendingCount, useNowTick, runDemo, getTsClients, getGates, approveGate, denyGate,
     getDocumentRequests, resolveDocumentRequest, getQuestions, resolveQuestion,
     compileSeat, deliverPack, getRuntimeStatus, testSkill,
+    getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry,
     timeAgo, tokenizeJSON,
   };
 })();

@@ -15,6 +15,7 @@
     play:      ["M6 4l14 8-14 8V4z"],
     chevron:   ["M15 5l-7 7 7 7"],
     clients:   ["M4 20V10l8-6 8 6v10", "M9 20v-6h6v6"],
+    team:      ["M8 11a3 3 0 100-6 3 3 0 000 6z", "M2 20c0-3 2.5-5 6-5s6 2 6 5", "M17 5a3 3 0 010 6", "M15 15c2.5 0 5 1.5 5 5"],
   };
   function Icon({ name, size = 18 }) {
     return h("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
@@ -47,6 +48,7 @@
   const NAV = [
     { id: "clients",   label: "Clients",      shortLabel: "Clients",  icon: "clients" },
     { id: "roster",    label: "Roster",       shortLabel: "Roster",   icon: "roster" },
+    { id: "team",      label: "Team",         shortLabel: "Team",     icon: "team" },
     { id: "agent",     label: "Agent page",   shortLabel: "Agent",    icon: "agent" },
     { id: "stream",    label: "A2A stream",   shortLabel: "A2A",      icon: "stream" },
     { id: "board",     label: "Board",        shortLabel: "Board",    icon: "board" },
@@ -533,8 +535,103 @@
           }, running && lastRunClientId === c.id ? "Running…" : "Validate")))));
   }
 
+  // -------------------------------------------------------------- team --
+  // The REAL roster Lo Smistatore routes against — who's on the desk, what
+  // they're competent for, which clients they own, whether they're
+  // available. NOT the same thing as the "Roster" page (the 7 AI seats) —
+  // this is the human/agent staff directory backing route()'s actual
+  // decisions, editable and persisted, replacing what used to be a
+  // hardcoded fixture file nobody but a developer could change.
+  const A2A_MESSAGE_TYPES = [
+    "pack_delivered", "document_delivered", "item_missing",
+    "question_for_studio", "instruction_from_studio", "answer_with_evidence",
+    "escalation_requested", "acknowledgment", "correction_request",
+  ];
+
+  function emptyTeamForm() { return { agent: "", competence: [], clients: "*", available: true, tier: 0 }; }
+
+  function Team() {
+    const { getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry } = API();
+    const [roster, setRoster] = useState(null);
+    const [error, setError] = useState(null);
+    const [editingId, setEditingId] = useState(null); // null = adding a new entry
+    const [form, setForm] = useState(emptyTeamForm);
+
+    const refresh = () => getRoster().then(setRoster).catch((e) => setError(String(e)));
+    useEffect(() => { refresh(); }, []);
+
+    const toggleCompetence = (t) => setForm((f) => ({
+      ...f, competence: f.competence.includes(t) ? f.competence.filter((x) => x !== t) : [...f.competence, t],
+    }));
+
+    const startEdit = (entry) => {
+      setEditingId(entry.id);
+      setForm({ agent: entry.agent, competence: entry.competence, clients: entry.clients.join(", "), available: entry.available, tier: entry.tier });
+      setError(null);
+    };
+    const cancelEdit = () => { setEditingId(null); setForm(emptyTeamForm()); setError(null); };
+
+    const submit = async () => {
+      setError(null);
+      const payload = {
+        agent: form.agent.trim(),
+        competence: form.competence,
+        clients: form.clients.split(",").map((c) => c.trim()).filter(Boolean),
+        available: form.available,
+        tier: Number(form.tier) || 0,
+      };
+      try {
+        if (editingId) await updateRosterEntry(editingId, payload);
+        else await addRosterEntry(payload);
+        cancelEdit();
+        refresh();
+      } catch (e) { setError(String((e && e.message) || e)); }
+    };
+
+    const remove = async (id) => { await removeRosterEntry(id); refresh(); };
+    const toggleAvailable = async (entry) => { await updateRosterEntry(entry.id, { available: !entry.available }); refresh(); };
+
+    if (!roster) return h(EmptyState, null, "Loading the roster…");
+
+    return h("div", null,
+      h("p", { className: "hint" },
+        "Who Lo Smistatore actually routes messages to — real and editable, saved to disk, read fresh on every routed message (no restart needed). This is different from the “Roster” page, which lists the 7 AI seats — this is the staff directory route() reads competence, client ownership, and availability from."),
+      h("div", { className: "panel stacked-panel" },
+        h("h3", { className: "panel-title" }, editingId ? "Edit staff entry" : "Add staff entry"),
+        h("div", { className: "pack-tester-row" },
+          h("label", { className: "field-label-inline" }, "Agent id",
+            h("input", { className: "text-input", value: form.agent, placeholder: "e.g. l_amministrativo, studio_lead", onChange: (e) => setForm({ ...form, agent: e.target.value }) })),
+          h("label", { className: "field-label-inline" }, "Clients (comma-separated, or *)",
+            h("input", { className: "text-input", value: form.clients, placeholder: "*", onChange: (e) => setForm({ ...form, clients: e.target.value }) })),
+          h("label", { className: "field-label-inline" }, "Tier (0 = primary, 1 = backup, …)",
+            h("input", { className: "text-input", type: "number", value: form.tier, onChange: (e) => setForm({ ...form, tier: e.target.value }) })),
+          h("label", { className: "checkbox-label" },
+            h("input", { type: "checkbox", checked: form.available, onChange: (e) => setForm({ ...form, available: e.target.checked }) }),
+            "Available")),
+        h("div", { className: "field-label" }, "Competence — which message types this entry can take"),
+        h("div", { className: "skill-toggle-grid" },
+          A2A_MESSAGE_TYPES.map((t) => h("label", { key: t, className: "checkbox-label" },
+            h("input", { type: "checkbox", checked: form.competence.includes(t), onChange: () => toggleCompetence(t) }),
+            t))),
+        h("div", { className: "pack-tester-row" },
+          h("button", { className: "btn-primary", onClick: submit, disabled: !form.agent.trim() || form.competence.length === 0 },
+            editingId ? "Save changes" : "Add to roster"),
+          editingId && h("button", { className: "btn-secondary", onClick: cancelEdit }, "Cancel")),
+        error && h("div", { className: "error-banner" }, error)),
+      h("div", { className: "panel" },
+        h("h3", { className: "panel-title" }, `Current roster (${roster.length})`),
+        roster.length === 0 ? h(EmptyState, null, "Nobody on the roster — every message will escalate to “ladder exhausted.”") :
+          roster.map((r) => h("div", { className: "feed-row", key: r.id, style: { alignItems: "center", flexWrap: "wrap", gap: 8 } },
+            h("div", { style: { flex: 1, minWidth: 200 } },
+              h("div", { style: { fontWeight: 600 } }, `${r.agent} · tier ${r.tier}${r.available ? "" : " — unavailable"}`),
+              h("div", { className: "text" }, `Handles: ${r.competence.join(", ") || "(none)"} · Clients: ${r.clients.join(", ") || "(none)"}`)),
+            h("button", { className: "btn-secondary", onClick: () => toggleAvailable(r) }, r.available ? "Mark unavailable" : "Mark available"),
+            h("button", { className: "btn-secondary", onClick: () => startEdit(r) }, "Edit"),
+            h("button", { className: "btn-secondary", onClick: () => remove(r.id) }, "Remove")))));
+  }
+
   window.AgentDeskComponents = {
     Icon, StatusDot, ViewHeader, EmptyState, SeatMonogram, Sidebar,
-    Roster, AgentPage, A2AStream, Board, Memory, Approvals, Clients,
+    Roster, AgentPage, A2AStream, Board, Memory, Approvals, Clients, Team,
   };
 })();
