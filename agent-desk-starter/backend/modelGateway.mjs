@@ -13,7 +13,13 @@ const LOCAL_SLM_URL = process.env.LOCAL_SLM_URL || 'http://localhost:11434/v1/ch
 const LOCAL_SLM_MODEL = process.env.LOCAL_SLM_MODEL || 'qwen2.5:3b';
 
 const FALLBACK_LLM_URL = process.env.FALLBACK_LLM_URL || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent';
-const FALLBACK_LLM_KEY = process.env.FALLBACK_LLM_KEY || process.env.GEMINI_API_KEY || 'AQ.Ab8RN6IZdvJBv4WCl732MtPGC2O5Opwp2LzwMFnsbo3T_bS-9A';
+// No hardcoded fallback key — a real, live-looking Gemini key was committed
+// here directly in source (now revoked/rotated, ask whoever owns the
+// Google AI Studio project). Credentials belong in .env (gitignored, see
+// backend/loadEnv.mjs) or a real environment variable, never a literal in
+// a file that's checked into git — that's permanent in history the moment
+// it's pushed, private repo or not.
+const FALLBACK_LLM_KEY = process.env.FALLBACK_LLM_KEY || process.env.GEMINI_API_KEY || '';
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.MODEL_GATEWAY_TIMEOUT_MS) || 20000;
 
