@@ -29,12 +29,36 @@
 
   function StatusDot({ live }) { return h("span", { className: `live-dot${live ? " live" : ""}` }); }
 
+  // ---- Model Gateway status badge -------------------------------------
+  const GATEWAY_TIER_STYLE = {
+    edge:    { fg: "#177355", dot: "#1F9D6B" },
+    cloud:   { fg: "#0A63E0", dot: "#0A63E0" },
+    offline: { fg: "#9A5B12", dot: "#F08000" },
+  };
+  function GatewayStatusBadge() {
+    const { getGatewayStatus } = API();
+    const [status, setStatus] = useState(null);
+    useEffect(() => {
+      let cancelled = false;
+      const refresh = () => getGatewayStatus().then((s) => { if (!cancelled) setStatus(s); }).catch(() => {});
+      refresh();
+      const id = setInterval(refresh, 15000);
+      return () => { cancelled = true; clearInterval(id); };
+    }, []);
+    if (!status) return null;
+    const style = GATEWAY_TIER_STYLE[status.tier] || GATEWAY_TIER_STYLE.offline;
+    return h("span", { className: "gateway-status", title: "Which model-gateway tier askModel() is currently using" },
+      h("span", { className: "live-dot live", style: { background: style.dot, width: 7, height: 7 } }),
+      h("span", { style: { color: style.fg } }, status.label));
+  }
+
   function ViewHeader({ title, description, live }) {
     return h("div", { className: "view-header" },
       h("div", { className: "view-header-row" },
         h("h1", null, title),
-        h("span", { className: "conn-status" }, h(StatusDot, { live }), live ? "Live" : "Offline")
-      ),
+        h("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
+          h(GatewayStatusBadge, null),
+          h("span", { className: "conn-status" }, h(StatusDot, { live }), live ? "Live" : "Offline"))),
       h("p", null, description));
   }
 
@@ -94,7 +118,8 @@
           !collapsed && h("span", null, "Collapse"))),
 
       h("header", { className: "mobile-header" },
-        h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p")),
+        h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p"),
+        h(GatewayStatusBadge, null)),
 
       h("nav", { className: "mobile-bottom-nav" },
         NAV.map((n) => h("button", {
@@ -374,9 +399,24 @@
       h("div", { className: "payload-line" }, `confirmed by ${e.record.confirmedBy || "?"} \u00b7 confidence ${e.record.confidence}`),
       h("div", { className: "confidence-bar" }, h("span", { style: { width: `${Math.round((e.record.confidence || 0) * 100)}%` } })));
 
-    const COA_SOURCE_LABEL = { memory: "remembered rule", slm: "model call", heuristic: "keyword fallback" };
-    const coaRow = (e, i) => h("div", { className: "ledger-row", key: "c" + i },
-      `${e.supplier} \u2192 ${e.account} @ ${e.confidence}` + (e.source ? ` (${COA_SOURCE_LABEL[e.source] || e.source})` : ""));
+    // Line-proposal detail row 
+    const SOURCE_BADGE = {
+      memory:    { label: "memory",  bg: "#E4F6EE", fg: "#177355" },
+      slm:       { label: "model",   bg: "#E7F0FD", fg: "#0A63E0" },
+      heuristic: { label: "keyword", bg: "#F6F8FC", fg: "#5B6B85" },
+    };
+    const coaRow = (e, i) => {
+      const badge = SOURCE_BADGE[e.source] || { label: e.source || "?", bg: "#F6F8FC", fg: "#5B6B85" };
+      const pct = Math.round((e.confidence || 0) * 100);
+      return h("div", { className: `ledger-row${e.needsHuman ? " needs-human" : ""}`, key: "c" + i },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+          h("b", null, e.supplier), " \u2192 ", e.account,
+          h("span", { className: "source-badge", style: { background: badge.bg, color: badge.fg } }, badge.label),
+          h("span", { className: "confidence-pct" }, `${pct}%`),
+          e.needsHuman && h("span", { className: "needs-human-flag" }, "\u26a0 needs sign-off")),
+        h("div", { className: "confidence-bar" },
+          h("span", { style: { width: `${pct}%`, background: e.needsHuman ? "#F08000" : "#1F9D6B" } })));
+    };
 
     const factRow = (e, i) => h("div", { className: "ledger-row", key: "cm" + i },
       h("div", null, `${e.record.key.split(":").slice(2).join(":")} \u2192 ${JSON.stringify(e.record.value).slice(0, 140)}`),
@@ -399,6 +439,8 @@
         ? `${e.client}: ${e.sourceMessageType} \u2192 ${e.owner}${e.escalated ? ` \u2014 escalated to tier ${e.escalationTier}` : ""}`
         : `${e.client}: ${e.sourceMessageType} \u2192 ESCALATED (${e.reason}, tried tiers ${JSON.stringify(e.triedTiers)})`);
 
+    const needsHumanCount = coa.filter((e) => e.needsHuman).length;
+
     const leftPanel = h("div", { className: "panel", style: { display: "flex", flexDirection: "column", gap: 14 } },
       h(MemSection, {
         title: "Learned classification rules", count: archivistRules.length, defaultOpen: true,
@@ -406,7 +448,7 @@
       }, archivistRules.map(ruleRow)),
       h(MemSection, {
         title: "This run's classification proposals", count: coa.length,
-        desc: "What Il Classificatore just suggested for each low-confidence line \u2014 live for THIS run only, not saved memory. Thrown away on the next run unless a human confirms one, which is what turns it into a learned rule above.",
+        desc: `What Il Classificatore just suggested for each low-confidence line \u2014 source (memory / model / keyword), confidence, and whether it still needs a human's sign-off. Live for THIS run only, not saved memory.${needsHumanCount ? ` ${needsHumanCount} row${needsHumanCount === 1 ? "" : "s"} below threshold need sign-off.` : ""}`,
       }, coa.map(coaRow)),
       h(MemSection, {
         title: "Client facts \u2014 L'Amministrativo", count: clientFacts.length,
@@ -631,7 +673,7 @@
   }
 
   window.AgentDeskComponents = {
-    Icon, StatusDot, ViewHeader, EmptyState, SeatMonogram, Sidebar,
+    Icon, StatusDot, GatewayStatusBadge, ViewHeader, EmptyState, SeatMonogram, Sidebar,
     Roster, AgentPage, A2AStream, Board, Memory, Approvals, Clients, Team,
   };
 })();

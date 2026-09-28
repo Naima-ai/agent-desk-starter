@@ -79,7 +79,7 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
   // 3 — Solve the low-confidence tail (pre-fill): Il Classificatore.
   for (const line of tail) {
     const r = await classifyLine(line, vatBatch.client, chartOfAccounts);
-    publish("coa", { supplier: line.supplier, account: r.account, confidence: r.confidence, source: r.source, options: chartOfAccounts });
+    publish("coa", { supplier: line.supplier, account: r.account, confidence: r.confidence, source: r.source, needsHuman: r.needsHuman, options: chartOfAccounts });
     // r.source is otherwise invisible in the UI — memory (a rule already
     // learned for this client+supplier), slm (a real modelGateway.mjs call —
     // Meet's classifier work), or heuristic (the plain keyword fallback, only

@@ -95,6 +95,7 @@
 
   const runDemo               = (clientId) => getJSON(`/api/run-demo${clientId ? `?client=${encodeURIComponent(clientId)}` : ""}`);
   const getTsClients          = () => getJSON("/api/ts-clients");
+  const getGatewayStatus       = () => getJSON("/api/gateway-status");
   const getGates               = () => getJSON("/api/gates");
   const approveGate            = (id, approvedBy) => postJSON(`/api/gate/${id}/approve`, { approvedBy });
   const denyGate                = (id, reason) => postJSON(`/api/gate/${id}/deny`, { reason });
@@ -191,7 +192,7 @@
 
   window.AgentDeskAPI = {
     SEATS, SEAT_BY_ID, AGENT_COLOR, A2A_TYPE_META, SKILL_TEST_CONFIG,
-    useBus, usePendingCount, useNowTick, runDemo, getTsClients, getGates, approveGate, denyGate,
+    useBus, usePendingCount, useNowTick, runDemo, getTsClients, getGatewayStatus, getGates, approveGate, denyGate,
     getDocumentRequests, resolveDocumentRequest, getQuestions, resolveQuestion,
     compileSeat, deliverPack, getRuntimeStatus, testSkill,
     getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry,

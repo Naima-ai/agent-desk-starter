@@ -8,6 +8,7 @@ import { dirname, join, extname } from "node:path";
 import { subscribe, history, publish } from "./bus.mjs";
 import { makeMessage } from "../contracts/a2aSchema.mjs";
 import { compile, compileWithJobText } from "./compiler.mjs";
+import { getGatewayStatus } from "./modelGateway.mjs";
 import { runVatFilingPath } from "./scenario/vatFilingPath.mjs";
 import * as teamSystem from "./connectors/teamSystem.mjs";
 import {
@@ -125,6 +126,14 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/api/ts-clients" && req.method === "GET") {
     const list = await teamSystem.listClients();
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
+    return;
+  }
+
+  // GET /api/gateway-status — which model-gateway tier askModel() would
+  // currently land on (edge SLM / cloud fallback / offline heuristic).
+  if (url.pathname === "/api/gateway-status" && req.method === "GET") {
+    const status = await getGatewayStatus();
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(status));
     return;
   }
 

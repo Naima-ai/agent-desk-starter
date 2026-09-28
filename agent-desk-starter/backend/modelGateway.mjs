@@ -88,6 +88,34 @@ export async function askModel({
   return getOfflineFallback({ prompt, systemPrompt, schema });
 }
 
+export async function getGatewayStatus() {
+  // Tier 1 — is the local Ollama/Qwen server actually reachable right now?
+  try {
+    const probeUrl = LOCAL_SLM_URL.replace(/\/v1\/chat\/completions\/?$/, '/v1/models');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    try {
+      const res = await fetch(probeUrl, { signal: controller.signal });
+      if (res.ok) {
+        return { tier: 'edge', label: `Local SLM (${LOCAL_SLM_MODEL})`, model: LOCAL_SLM_MODEL };
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    // Ollama not running / unreachable — fall through to the next tier.
+  }
+
+  // Tier 2 — no live edge model, but a cloud fallback key is configured.
+  if (FALLBACK_LLM_KEY) {
+    return { tier: 'cloud', label: 'Cloud Fallback (Gemini)', model: 'gemini-flash-latest' };
+  }
+
+  // Tier 3 — neither is available; askModel() would serve the deterministic
+  // offline heuristic for every call right now.
+  return { tier: 'offline', label: 'Offline Heuristic Fallback', model: null };
+}
+
 /**
  * Executes an HTTP POST against an OpenAI/Ollama endpoint or native Gemini REST endpoint.
  */
@@ -223,4 +251,4 @@ function getOfflineFallback({ prompt, schema }) {
   return schema ? { response: defaultText } : defaultText;
 }
 
-export default { askModel };
+export default { askModel, getGatewayStatus };
