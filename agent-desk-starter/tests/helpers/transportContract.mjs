@@ -95,6 +95,30 @@ export function registerTransportContract({ name, createHarness, skip = false })
     const [record] = await transport.deadLetters();
     assert.equal(record.messageId, "msg-dead");
   });
+
+  test(`${name}: dead letters can be explicitly replayed after repair`, { skip }, async (t) => {
+    const { transport, cleanup = async () => {} } = await createHarness();
+    t.after(cleanup);
+    await transport.connect();
+    const stopFailed = await transport.consume({ recipient: "agent_a", consumerId: "runtime" }, async (delivery) => {
+      await transport.deadLetter(delivery, { code: "BROKEN", reason: "attempts_exhausted" });
+    });
+    await transport.publish("agent_a", "recoverable", { messageId: "msg-replay" });
+    await waitFor(async () => (await transport.deadLetters()).length === 1, { timeoutMs: 3_000 });
+    await stopFailed();
+
+    const received = [];
+    await transport.consume({ recipient: "agent_a", consumerId: "runtime" }, async (delivery) => {
+      received.push(delivery.payload);
+      await transport.ack(delivery);
+    });
+    const [record] = await transport.deadLetters();
+    const replayed = await transport.replayDeadLetter(record.id);
+    await waitFor(() => received.length === 1, { timeoutMs: 3_000 });
+    assert.equal(replayed.messageId, "msg-replay");
+    assert.deepEqual(received, ["recoverable"]);
+    assert.equal((await transport.deadLetters()).length, 0);
+  });
 }
 
 export { waitFor };

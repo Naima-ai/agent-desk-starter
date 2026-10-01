@@ -12,10 +12,16 @@ import * as archivista from "../archivista.mjs";
 import * as teamSystem from "../connectors/teamSystem.mjs";
 import * as ade from "../connectors/adePortal.mjs";
 import * as La from "../lAmministrativo.mjs";
+import { publishA2A } from "../messaging/a2aBus.mjs";
 import { runAgent } from "../runtime/agentEngine.mjs";
+import { startDefaultA2AConsumers, waitForA2AOutcome } from "../runtime/a2aConsumers.mjs";
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const a2a = (m) => publish("a2a", { message: makeMessage(m) });
+async function a2a(input) {
+  const message = makeMessage(input);
+  await publishA2A(message, { publisher: message.from });
+  return message;
+}
 const feed = (agent, text, tone = "info") => publish("feed", { agent, text, tone });
 
 /** The real Italian LIPE deadline: last day of the second month after the
@@ -40,6 +46,7 @@ function describeAnomaly(an) {
 }
 
 export async function runVatFilingPath(clientId = "rossi_srl") {
+  await startDefaultA2AConsumers();
   publish("board", { step: "start", label: "Pre-filing validation started" });
 
   // 1 — TeamSystem compiles the periodic VAT/LIPE/F24 batch from the ledger,
@@ -124,50 +131,40 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
       publish("board", { step: "flagged", label: `Problem found — ${describeAnomaly(an)}` });
       const ev = evidence.put({ kind: "anomaly", ruleId: an.ruleId, detail: an, period });
       publish("evidence", { record: ev });
-      // A real, routed A2A message — was previously just a narrated feed
-      // line ("Correction request queued...") that never actually called
-      // Lo Smistatore's route(). server.mjs's bus subscriber picks this up
-      // (any a2a message addressed to lo_smistatore) and publishes the real
-      // routing decision + its own feed line, so no separate feed() call is
-      // needed here for that part.
-      a2a({ type: "correction_request", from: "l_addetto_iva", to: "lo_smistatore", client: vatBatch.client,
-            ruleId: an.ruleId, message: describeAnomaly(an), period });
+      // The durable Lo Smistatore consumer runs the routing operation, persists
+      // its result, and publishes the compatible UI routing/feed events.
+      await a2a({ type: "correction_request", from: "l_addetto_iva", to: "lo_smistatore", client: vatBatch.client,
+                  ruleId: an.ruleId, message: describeAnomaly(an), period });
       await wait(600);
       continue;
     }
 
     const instruction = `fetch ${an.expected.replace(/^invoice\s+/, "")} for ${an.period}`;
-    a2a({ type: "instruction_from_studio", from: "lo_smistatore", to: "l_amministrativo", client: vatBatch.client,
-          instruction, due: an.period });
-    feed("lo_smistatore", `Anomaly routed to the client agent: ${an.expected}.`);
-    await wait(600);
-
-    // Checks the bank feed + SDI inbox first; 
-    // if genuinely missing it opens a tracked request. Long-lived reminders
-    // move to correlated durable-bus triggers in the messaging phase.
-    const instructionRun = await runAgent({
-      seat: "l_amministrativo",
-      operation: "handle_instruction",
-      input: { message: { instruction, due: an.period } },
-      context: { clientId: vatBatch.client, actor: "agent:lo_smistatore" },
+    const instructionMessage = await a2a({
+      type: "instruction_from_studio", from: "lo_smistatore", to: "l_amministrativo", client: vatBatch.client,
+      instruction, due: an.period,
     });
-    if (instructionRun.status !== "completed") {
-      throw new Error(`Runtime could not handle the studio instruction: ${instructionRun.error?.code || instructionRun.status}`);
+    feed("lo_smistatore", `Anomaly routed to the client agent: ${an.expected}.`);
+    const instructionOutcome = await waitForA2AOutcome(instructionMessage.id);
+    if (instructionOutcome.status !== "completed") {
+      throw new Error(`Runtime could not handle the studio instruction: ${instructionOutcome.run?.error?.code || instructionOutcome.status}`);
     }
-    const result = instructionRun.artifacts[0];
+    const result = instructionOutcome.result;
 
     if (result.askedOwner) {
       feed("l_amministrativo", `Missing invoice not on file — asked the owner on WhatsApp (request ${result.requestId}).`);
       await wait(1200);
       // In the real flow this waits for the owner's WhatsApp reply or a later
       // SDI-inbox poll. The demo simulates the reply arriving here, but goes
-      // through the real resolveDocumentRequest() path
+      // through the two-phase resolution path: persist the outgoing event,
+      // then commit the local state/evidence change.
       const sdiId = "IT" + Math.floor(Math.random() * 900 + 100);
-      const resolved = La.resolveDocumentRequest(result.requestId, { foundVia: "owner_reply", sdiId });
-      if (resolved) {
+      const resolution = La.prepareDocumentRequestResolution(result.requestId, { foundVia: "owner_reply", sdiId });
+      if (resolution) {
+        await publishA2A(resolution.a2a, { publisher: resolution.a2a.from });
+        const resolved = resolution.commit();
         publish("evidence", { record: resolved.evidence });
-        publish("a2a", { message: resolved.a2a });
-        a2a({ from: "lo_smistatore", to: "l_amministrativo", client: vatBatch.client, type: "acknowledgment", ref: sdiId });
+        await a2a({ from: "lo_smistatore", to: "l_amministrativo", client: vatBatch.client, type: "acknowledgment", ref: sdiId });
       }
       feed("l_addetto_iva", "Missing invoice received — re-inserted into the batch.", "good");
       vatBatch.lines.push({ id: "L5", supplier: "Verdi Srl", desc: "Fornitura mensile", net: 600.0, vat: 132.0, account: "30.10", confidence: 0.95 });

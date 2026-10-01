@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { A2AMessageSchema } from "../../contracts/a2aSchema.mjs";
+import { RoutingResultSchema } from "../../contracts/routingSchema.mjs";
 import { prepareSubmission } from "../connectors/adePortal.mjs";
 import { movements } from "../connectors/bankFeed.mock.mjs";
 import { draftInvoice } from "../connectors/fattureInCloudDraft.stub.mjs";
@@ -6,7 +8,10 @@ import { readSdiInbox } from "../connectors/sdiInbox.stub.mjs";
 import { readPriorPeriod, readVatBatch } from "../connectors/teamSystem.mjs";
 import { sendTemplate } from "../connectors/whatsapp.mjs";
 import { handleInstructionFromStudio } from "../lAmministrativo.mjs";
+import { getRoster } from "../rosterStore.mjs";
+import { route } from "../smistatore.mjs";
 import { AgentRegistry } from "./agentRegistry.mjs";
+import { defaultRoutingTaskStore } from "./routingTaskStore.mjs";
 import { ToolRegistry } from "./toolRegistry.mjs";
 
 const BatchSchema = z.object({
@@ -73,7 +78,40 @@ const DraftInvoiceOutputSchema = z.object({
   status: z.literal("draft"),
 }).passthrough();
 
+const PersistRoutingInputSchema = z.object({
+  sourceMessageId: z.string().min(1),
+  result: RoutingResultSchema,
+}).strict();
+
+const PersistRoutingOutputSchema = z.object({
+  persisted: z.literal(true),
+  duplicate: z.boolean(),
+  sourceMessageId: z.string().min(1),
+}).strict();
+
 export const defaultToolRegistry = new ToolRegistry()
+  .register({
+    id: "board.create_task",
+    action: "create_routing_task",
+    risk: "write",
+    inputSchema: PersistRoutingInputSchema,
+    outputSchema: PersistRoutingOutputSchema,
+    clientScopePaths: ["result.client"],
+    locations: ["studio_edge"],
+    idempotent: true,
+    execute: (input) => defaultRoutingTaskStore.persist(input),
+  })
+  .register({
+    id: "escalation.ladder",
+    action: "persist_routing_escalation",
+    risk: "write",
+    inputSchema: PersistRoutingInputSchema,
+    outputSchema: PersistRoutingOutputSchema,
+    clientScopePaths: ["result.client"],
+    locations: ["studio_edge"],
+    idempotent: true,
+    execute: (input) => defaultRoutingTaskStore.persist(input),
+  })
   .register({
     id: "teamsystem.read_vat_batch",
     action: "read_vat_batch",
@@ -166,6 +204,21 @@ export const defaultToolRegistry = new ToolRegistry()
   });
 
 export const defaultAgentRegistry = new AgentRegistry()
+  .register({
+    seat: "lo_smistatore",
+    operations: {
+      route_message: {
+        inputSchema: z.object({ message: A2AMessageSchema }).strict(),
+        tools: ["board.create_task", "escalation.ladder"],
+        handler: async ({ message }, ctx) => {
+          const result = route(message, getRoster());
+          const toolId = result.kind === "routed_task" ? "board.create_task" : "escalation.ladder";
+          await ctx.tools.invoke(toolId, { sourceMessageId: message.id, result });
+          return { artifacts: [result] };
+        },
+      },
+    },
+  })
   .register({
     seat: "l_addetto_iva",
     operations: {

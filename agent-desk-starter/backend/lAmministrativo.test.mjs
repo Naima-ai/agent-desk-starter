@@ -62,6 +62,19 @@ test("resolveDocumentRequest: cancels the ladder and reports document_delivered"
   assert.equal(second, null, "resolving an already-resolved (or unknown) request is a safe no-op");
 });
 
+test("prepareDocumentRequestResolution leaves local state pending until durable publish commits", async () => {
+  const request = await La.collectDocument(FULL_MANIFEST, CLIENT, {
+    docType: "invoice", supplier: "Durability Supplier", period: "2099-Q4",
+  });
+  const prepared = La.prepareDocumentRequestResolution(request.requestId, { sdiId: "IT-DURABLE" });
+  assert.equal(prepared.a2a.type, "document_delivered");
+  assert.equal(pendingDocumentRequests.has(request.requestId), true);
+  const resolved = prepared.commit();
+  assert.ok(resolved.evidence);
+  assert.equal(pendingDocumentRequests.has(request.requestId), false);
+  assert.equal(prepared.commit(), resolved, "commit is idempotent for a successful prepared resolution");
+});
+
 test("handleInstructionFromStudio: routes a recognised 'fetch X for Y' instruction", async () => {
   const r = await La.handleInstructionFromStudio(FULL_MANIFEST, CLIENT, { instruction: "fetch Verdi Srl for 2026-Q3" });
   assert.equal(r.a2a.type, "item_missing"); // falls through to collectDocument, same as above

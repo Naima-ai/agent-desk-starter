@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This plan covers Matteo's platform work:
+This plan covers platform runtime and A2A module work:
 
 - agent execution engine;
 - centralized runtime guardrails;
@@ -205,8 +205,8 @@ the engine and guardrails.
 ### Phase 4: durable A2A bus
 
 Status: implemented with Redis Streams plus the in-memory contract adapter.
-Runtime output is durable when `A2A_TRANSPORT=redis`; the remaining legacy A2A
-producers and business-consumer cutover are intentionally Phase 5 work.
+Runtime output is durable when `A2A_TRANSPORT=redis`; Phase 5 completed the
+legacy producer and active business-consumer cutover.
 
 Implement the work in `04-message-bus-plan.md`:
 
@@ -221,6 +221,12 @@ Exit criteria: an unacknowledged A2A message survives a process restart and is
 redelivered without duplicating a completed action.
 
 ### Phase 5: migration and end-to-end cutover
+
+Status: implemented for the platform-owned dispatcher and first client-agent
+vertical flow. All repository A2A producers use durable admission, the old HTTP
+subscriber is removed, and one consumer path owns each active recipient.
+Production release remains blocked on the Phase 1 Ed25519 envelope/key work and
+on migration of business operations owned by the remaining seat modules.
 
 Implement the work in `05-integration-test-rollout-plan.md`:
 

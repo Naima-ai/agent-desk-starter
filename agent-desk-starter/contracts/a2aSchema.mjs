@@ -29,7 +29,7 @@ export const A2AMessageSchema = z.discriminatedUnion("type", [
   z.object({ ...Base, type: z.literal("item_missing"), expected: z.string(), period: z.string(), urgency: z.enum(["low","normal","high"]) }).strict(),
   z.object({ ...Base, type: z.literal("question_for_studio"), topic: z.string(), body: z.string() }).strict(),
   z.object({ ...Base, type: z.literal("instruction_from_studio"), instruction: z.string(), due: z.string().optional() }).strict(),
-  z.object({ ...Base, type: z.literal("answer_with_evidence"), answer: z.string(), evidenceId: z.string() }).strict(),
+  z.object({ ...Base, type: z.literal("answer_with_evidence"), answer: z.string(), evidenceId: z.string(), ref: z.string().optional() }).strict(),
   z.object({ ...Base, type: z.literal("escalation_requested"), reason: z.string() }).strict(),
   z.object({ ...Base, type: z.literal("acknowledgment"), ref: z.string() }).strict(),
   // l_addetto_iva -> lo_smistatore: a VAT-rule anomaly (bad rate, bad P.IVA,

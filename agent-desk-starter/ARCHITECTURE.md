@@ -53,12 +53,14 @@ other file has to agree with them — they're the shared rulebook.
 | `systemPolicy.mjs` | Reviewed non-overridable refusal and system-gate policy, independent of generated manifests. |
 | `approvalStore.mjs` | Durable approval lifecycle (`pending → approved → consumed`, denied, or expired), bound to hashes of the exact run/client/tool/action/arguments. |
 | `auditLog.mjs` | Append-only decision audit adapters. The default JSONL log contains identities, hashes, outcomes, and policy references—never tool payloads or secrets. |
+| `a2aConsumers.mjs` | Owns the single durable consumer path for Lo Smistatore and L'Amministrativo, invokes their runtime operations, and publishes compatible UI telemetry. |
+| `routingTaskStore.mjs` | Idempotently persists dispatcher outcomes before an inbound delivery is acknowledged. |
 | Runtime startup check | Validates every business tool advertised by enabled-seat manifests and fails startup on missing registry mappings or operation/manifest mismatches. |
 | `messaging/a2aBus.mjs` | Verified, transport-neutral A2A facade: admission deduplication, durable publish, idempotent completion, retries, acknowledgment, and dead-letter handling. |
 | `messaging/inMemoryTransport.mjs` | Deterministic offline/test transport with ack/nack, recovery, concurrency protection, retention bounds, and shared-state restart simulation. |
 | `messaging/redisStreamsTransport.mjs` | Production Redis Streams adapter using consumer groups, `XACK`, `XAUTOCLAIM`, bounded streams, and a dead-letter stream. |
 | `messaging/uiBus.mjs` | Bounded in-memory UI/SSE telemetry, isolated from durable delivery failures. |
-| `backend/bus.mjs` | Temporary compatibility facade for existing UI/demo `publish`, `subscribe`, and `history` call sites. |
+| `backend/bus.mjs` | UI-only compatibility facade. It rejects the `a2a` channel so domain messages cannot bypass durable admission. |
 | `modelGateway.mjs` | The one place that knows how to ask an AI model a question and get a structured answer back. A small, local model handles most requests; a bigger model steps in as backup. Every other file that needs "AI thinking" calls through here, instead of each having its own way of talking to a model. |
 
 ## backend/ — the agent brains
@@ -94,8 +96,9 @@ other file has to agree with them — they're the shared rulebook.
 
 Plays the whole story from start to finish, in order: batch arrives → checked →
 low-confidence lines resolved → missing item chased through the client → rule
-saved → batch re-assembled → human gate → filed. Useful both as a live demo and as
-a plain description of how the pieces are meant to connect.
+saved → batch re-assembled → human gate → filed. The missing-document handoff is
+admitted to the durable bus and waits for the correlated runtime-consumer
+outcome; the scenario does not execute the same instruction directly.
 
 ## frontend/ — the 5 screens
 

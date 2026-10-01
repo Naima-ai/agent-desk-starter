@@ -105,8 +105,8 @@ registered or exposed to an agent.
 | Manifest tool | Current mapping | Status | Required work |
 |---|---|---|---|
 | `a2a.endpoint:l_amministrativo` | `makeMessage()` + bus | messaging capability | Enforce typed messages and intended recipient |
-| `board.create_task` | Routing/UI publication in `server.mjs` | partial | Decide whether this is domain persistence or UI telemetry |
-| `escalation.ladder` | `startLadder()` | adapter-ready | Add lifecycle/cancellation schemas and audit |
+| `board.create_task` | Durable `routingTaskStore` adapter | registered | Idempotently persists routed tasks before acknowledgment |
+| `escalation.ladder` | Durable `routingTaskStore` escalation adapter | registered | Persists exhausted routing outcomes before acknowledgment |
 
 ### L'Archivista
 

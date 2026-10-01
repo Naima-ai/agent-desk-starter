@@ -80,6 +80,7 @@ test("default runtime configuration covers every business tool of its enabled se
   const report = await defaultAgentEngine.validateConfiguration();
   assert.equal(report.ok, true);
   assert.deepEqual(report.reports.map(({ seat, missingTools }) => ({ seat, missingTools })), [
+    { seat: "lo_smistatore", missingTools: [] },
     { seat: "l_addetto_iva", missingTools: [] },
     { seat: "l_amministrativo", missingTools: [] },
   ]);

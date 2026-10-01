@@ -201,6 +201,15 @@ export class InMemoryTransport {
 
   async deadLetters() { return this.state.deadLetters.slice(); }
 
+  async replayDeadLetter(id) {
+    const index = this.state.deadLetters.findIndex((record) => record.id === id);
+    if (index < 0) return null;
+    const record = this.state.deadLetters[index];
+    const persisted = await this.publish(record.recipient, record.payload, { messageId: record.messageId });
+    this.state.deadLetters.splice(index, 1);
+    return { ...persisted, replayedDeadLetterId: id };
+  }
+
   async health() {
     const entries = [...this.state.streams.values()].flat();
     const pending = entries.filter((entry) => entry.status === "pending");
@@ -216,4 +225,3 @@ export class InMemoryTransport {
     };
   }
 }
-

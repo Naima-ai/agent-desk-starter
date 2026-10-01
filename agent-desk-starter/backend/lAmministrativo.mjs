@@ -250,25 +250,38 @@ export async function collectDocument(manifest, clientId, expected, runtime = nu
   };
 }
 
-/* Call this once the missing document actually turns up — 
-   the owner replies with it, a later SDI-inbox poll finds it, etc. 
-   Cancels the ladder, records the evidence and tells the studio it's resolved. 
-   Returns null if the request id is unknown or already resolved (safe to call defensively). */
-export function resolveDocumentRequest(requestId, foundInfo = {}) {
+/* Prepare first so durable callers can persist the outbound message before
+   committing local state. Legacy in-process callers keep the one-step wrapper
+   below. Both paths return null for an unknown/already-resolved request. */
+export function prepareDocumentRequestResolution(requestId, foundInfo = {}) {
   const request = pendingDocumentRequests.get(requestId);
   if (!request || request.status !== "pending") return null;
-  request._ladder?.cancel();
-  request.status = "resolved";
-  const ev = evidence.put({
-    kind: "document", clientId: request.clientId, supplier: request.expected.supplier,
-    period: request.expected.period, foundVia: foundInfo.foundVia || "owner_reply", sdiId: foundInfo.sdiId,
-  });
   const a2aMsg = toStudio(request.clientId, {
     type: "document_delivered", doc: `${request.expected.docType} ${request.expected.supplier}`, sdiId: foundInfo.sdiId,
   });
-  pendingDocumentRequests.delete(requestId);
-  emitLadderEvent({ kind: "document_request", event: "resolved", requestId, clientId: request.clientId });
-  return { evidence: ev, a2a: a2aMsg };
+  let committed = null;
+  return {
+    a2a: a2aMsg,
+    commit() {
+      if (committed) return committed;
+      const current = pendingDocumentRequests.get(requestId);
+      if (!current || current !== request || current.status !== "pending") return null;
+      request._ladder?.cancel();
+      request.status = "resolved";
+      const ev = evidence.put({
+        kind: "document", clientId: request.clientId, supplier: request.expected.supplier,
+        period: request.expected.period, foundVia: foundInfo.foundVia || "owner_reply", sdiId: foundInfo.sdiId,
+      });
+      pendingDocumentRequests.delete(requestId);
+      emitLadderEvent({ kind: "document_request", event: "resolved", requestId, clientId: request.clientId });
+      committed = { evidence: ev, a2a: a2aMsg };
+      return committed;
+    },
+  };
+}
+
+export function resolveDocumentRequest(requestId, foundInfo = {}) {
+  return prepareDocumentRequestResolution(requestId, foundInfo)?.commit() || null;
 }
 
 // 2. fatturazione — invoicing (draft only; sending always waits on the gate)

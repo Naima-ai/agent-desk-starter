@@ -108,6 +108,30 @@ test("transient failures retry with a limit and then become dead letters", async
   assert.equal((await h.bus.deadLetters())[0].failure.reason, "attempts_exhausted");
 });
 
+test("an operator can replay an exhausted dead letter after the consumer is repaired", async (t) => {
+  const h = await harness({ retryPolicy: createRetryPolicy({ maxAttempts: 1, baseDelayMs: 0, jitter: 0 }) });
+  t.after(() => h.bus.close());
+  let failedCalls = 0;
+  const stopFailed = await h.bus.subscribeA2A({ recipient: "receiver", consumerId: "runtime" }, async () => {
+    failedCalls += 1;
+    const error = new Error("connector unavailable");
+    error.retryable = true;
+    throw error;
+  });
+  await h.bus.publishA2A(message());
+  await waitFor(async () => (await h.bus.deadLetters()).length === 1);
+  await stopFailed();
+
+  let repairedCalls = 0;
+  await h.bus.subscribeA2A({ recipient: "receiver", consumerId: "runtime" }, async () => { repairedCalls += 1; });
+  const [deadLetter] = await h.bus.deadLetters();
+  const replayed = await h.bus.replayDeadLetter(deadLetter.id);
+  await waitFor(() => repairedCalls === 1);
+  assert.equal(failedCalls, 1);
+  assert.equal(replayed.messageId, deadLetter.messageId);
+  assert.equal((await h.bus.deadLetters()).length, 0);
+});
+
 test("completed message IDs are acknowledged without repeating business work", async (t) => {
   const h = await harness();
   t.after(() => h.bus.close());

@@ -2,6 +2,7 @@
 // Serves the frontend, streams bus events, exposes compile + run + gate endpoints.
 import "./loadEnv.mjs"; // must be first — connector modules read process.env at import time
 import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname } from "node:path";
@@ -13,17 +14,19 @@ import { runVatFilingPath } from "./scenario/vatFilingPath.mjs";
 import * as teamSystem from "./connectors/teamSystem.mjs";
 import {
   pendingGates, pendingDocumentRequests, pendingQuestions,
-  resolveDocumentRequest, resolveQuestionById, deliverMonthlyPack, onLadderEvent,
+  prepareDocumentRequestResolution, deliverMonthlyPack, onLadderEvent,
   collectDocument, draftAndSendInvoice, sendReminder, logAttendanceOrExpense,
   answerEmployeeQuestion, trackDeadline, askStudio,
 } from "./lAmministrativo.mjs";
 import { onLadderEvent as onClassificationLadderEvent } from "./classificationGate.mjs";
-import { route } from "./smistatore.mjs";
 import { getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry } from "./rosterStore.mjs";
 import * as archivista from "./archivista.mjs";
 import { defaultApprovalStore } from "./runtime/approvalStore.mjs";
 import { defaultAgentEngine } from "./runtime/agentEngine.mjs";
-import { defaultA2ABus } from "./messaging/a2aBus.mjs";
+import { defaultA2ABus, publishA2A } from "./messaging/a2aBus.mjs";
+import {
+  defaultRuntimeA2AConsumers, startDefaultA2AConsumers, waitForA2AOutcome,
+} from "./runtime/a2aConsumers.mjs";
 
 // Bridge both L'Amministrativo's (owner-approval, WhatsApp-facing) and Il
 // Classificatore's (studio-internal) reminder/escalation ladders onto the
@@ -37,45 +40,17 @@ function bridgeLadderEvent(e, remindPhrase) {
   if (e.event === "reminder") {
     feedFromLadder(e, `reminder #${e.n} ${remindPhrase}${e.kind === "gate" ? ` (gate ${e.gateId})` : ` (request ${e.requestId})`}.`, "warn");
   } else if (e.event === "escalate") {
+    if (e.escalation) {
+      publishA2A(e.escalation, { publisher: e.escalation.from }).catch((error) => {
+        publish("feed", { agent: e.seat || "system", text: `Escalation could not be persisted: ${error.message}`, tone: "warn" });
+      });
+    }
     feedFromLadder(e, `no response after ${e.kind === "gate" ? "the gate" : "the document request"} reminders — escalated to Lo Smistatore.`, "warn");
   }
 }
 function feedFromLadder(e, suffix, tone) {
   publish("feed", { agent: e.seat || "l_amministrativo", text: `${e.kind === "gate" ? "Gate" : "Document request"} ${suffix}`, tone });
 }
-
-// Bridge Lo Smistatore onto the bus: every already-signed a2a message
-// addressed to it gets routed live, and the decision is published so the
-// frontend can show it. Doesn't touch vatFilingPath.mjs or lAmministrativo.mjs —
-// both already publish "a2a" events with a real `to`, this just reacts to them.
-// getRoster() is read fresh on every message (not cached), so an edit made
-// through the Team page takes effect on the very next routed message —
-// no restart needed.
-subscribe((e) => {
-  if (e.channel !== "a2a" || !e.message || e.message.to !== "lo_smistatore") return;
-  try {
-    const result = route(e.message, getRoster());
-    publish("routing", result);
-    if (result.kind === "routed_task") {
-      publish("feed", {
-        agent: "lo_smistatore",
-        text: `Routed ${result.sourceMessageType} (${result.client}) to ${result.owner}` +
-              `${result.escalated ? ` — escalated to tier ${result.escalationTier}` : ""}.`,
-        tone: result.escalated ? "warn" : "info",
-      });
-    } else {
-      publish("feed", {
-        agent: "lo_smistatore",
-        text: `Could not route ${result.sourceMessageType} for ${result.client} — ${result.reason}.`,
-        tone: "warn",
-      });
-    }
-  } catch (err) {
-    // A malformed message or an unknown roster shape should never crash the
-    // server — surface it on the feed instead, same as any other agent failure.
-    publish("feed", { agent: "lo_smistatore", text: `Routing failed: ${err.message}`, tone: "warn" });
-  }
-});
 
 // L'Archivista's confidence decay — its job.txt says a confirmed rule should
 // lose trust if it's never re-verified. decayConfidence() existed but
@@ -111,6 +86,29 @@ function readBody(req) {
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
+}
+
+async function publishA2AForRequest(res, message, { waitForOutcome = false } = {}) {
+  try {
+    await publishA2A(message, { publisher: message.from });
+    return waitForOutcome ? await waitForA2AOutcome(message.id) : true;
+  } catch (error) {
+    res.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({
+      error: "A2A delivery is temporarily unavailable.",
+      code: error?.code || "A2A_DELIVERY_FAILED",
+    }));
+    return false;
+  }
+}
+
+function operatorAuthorized(req) {
+  const expected = process.env.A2A_OPERATOR_TOKEN;
+  if (!expected) return { ok: false, status: 503, code: "OPERATOR_AUTH_NOT_CONFIGURED" };
+  const supplied = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const actualBytes = Buffer.from(supplied, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  const ok = actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+  return ok ? { ok: true } : { ok: false, status: 403, code: "OPERATOR_AUTH_FAILED" };
 }
 
 const server = createServer(async (req, res) => {
@@ -164,6 +162,32 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(records));
     } catch (error) {
       res.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(error?.message || error) }));
+    }
+    return;
+  }
+
+  const deadLetterReplayMatch = url.pathname.match(/^\/api\/a2a-dead-letters\/([^/]+)\/replay$/);
+  if (deadLetterReplayMatch && req.method === "POST") {
+    const authorization = operatorAuthorized(req);
+    if (!authorization.ok) {
+      res.writeHead(authorization.status, { "Content-Type": "application/json" }).end(JSON.stringify({
+        error: "Operator authorization is required for dead-letter replay.", code: authorization.code,
+      }));
+      return;
+    }
+    try {
+      const result = await defaultA2ABus.replayDeadLetter(decodeURIComponent(deadLetterReplayMatch[1]));
+      res.writeHead(202, { "Content-Type": "application/json" }).end(JSON.stringify({
+        accepted: true,
+        messageId: result.messageId || null,
+        recipient: result.recipient,
+        deliveryId: result.id,
+      }));
+    } catch (error) {
+      const status = error?.code === "DEAD_LETTER_NOT_FOUND" ? 404 : 503;
+      res.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify({
+        error: error?.message || "Dead-letter replay failed.", code: error?.code || "DEAD_LETTER_REPLAY_FAILED",
+      }));
     }
     return;
   }
@@ -288,10 +312,12 @@ const server = createServer(async (req, res) => {
     const [, id] = docReqMatch;
     const body = await readBody(req);
     const { sdiId } = body ? JSON.parse(body) : {};
-    const result = resolveDocumentRequest(id, { foundVia: "owner_reply", sdiId });
-    if (!result) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such request, or already resolved" })); return; }
+    const resolution = prepareDocumentRequestResolution(id, { foundVia: "owner_reply", sdiId });
+    if (!resolution) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such request, or already resolved" })); return; }
+    if (!await publishA2AForRequest(res, resolution.a2a)) return;
+    const result = resolution.commit();
+    if (!result) { res.writeHead(409, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "request state changed before resolution completed" })); return; }
     publish("evidence", { record: result.evidence });
-    publish("a2a", { message: result.a2a });
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id }));
     return;
   }
@@ -312,9 +338,16 @@ const server = createServer(async (req, res) => {
     const finalAnswer = answer || `Studio's reply to "${question.topic}".`;
     const finalEvidenceId = evidenceId || `studio_${Date.now()}`;
     // Simulate the incoming message this endpoint stands in for
-    const incoming = makeMessage({ from: "lo_smistatore", to: "l_amministrativo", client: question.clientId, type: "answer_with_evidence", answer: finalAnswer, evidenceId: finalEvidenceId });
-    publish("a2a", { message: incoming });
-    resolveQuestionById(id, { answer: finalAnswer, evidenceId: finalEvidenceId });
+    const incoming = makeMessage({
+      from: "lo_smistatore", to: "l_amministrativo", client: question.clientId,
+      type: "answer_with_evidence", answer: finalAnswer, evidenceId: finalEvidenceId, ref: id,
+    });
+    const outcome = await publishA2AForRequest(res, incoming, { waitForOutcome: true });
+    if (!outcome) return;
+    if (!outcome.result?.resolved) {
+      res.writeHead(409, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "question state changed before the answer was applied" }));
+      return;
+    }
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id }));
     return;
   }
@@ -326,7 +359,7 @@ const server = createServer(async (req, res) => {
     const period = decodeURIComponent(packMatch[2]);
     const result = await deliverMonthlyPack(clientId, period);
     publish("evidence", { record: result.evidence });
-    publish("a2a", { message: result.a2a });
+    if (!await publishA2AForRequest(res, result.a2a)) return;
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, pack: result.pack }));
     return;
   }
@@ -390,8 +423,8 @@ const server = createServer(async (req, res) => {
       // Anything this produced (evidence, an a2a message, a new gate) shows
       // up on the live bus too — not a side channel only this response sees.
       if (result && result.evidence) publish("evidence", { record: result.evidence });
-      if (result && result.ack) publish("a2a", { message: result.ack });
-      if (result && result.a2a) publish("a2a", { message: result.a2a });
+      if (result && result.ack) await publishA2A(result.ack, { publisher: result.ack.from });
+      if (result && result.a2a) await publishA2A(result.a2a, { publisher: result.a2a.from });
       if (result && result.ticket) publish("gate", { id: result.ticket.id, clientId, action: result.ticket.action, payload: result.ticket.payload, status: "pending" });
       res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, result }));
     } catch (e) {
@@ -412,6 +445,7 @@ const server = createServer(async (req, res) => {
 // no registered implementation, or if an operation declares a tool outside
 // its manifest. A2A endpoint/handoff entries are messaging capabilities.
 await defaultAgentEngine.validateConfiguration();
+await startDefaultA2AConsumers();
 server.listen(PORT, () => console.log(`Agent Desk starter on http://localhost:${PORT}`));
 
 let shuttingDown = false;
@@ -419,6 +453,7 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   await new Promise((resolve) => server.close(resolve));
+  await defaultRuntimeA2AConsumers.close();
   await defaultA2ABus.close();
 }
 process.once("SIGINT", () => shutdown().finally(() => process.exit(0)));

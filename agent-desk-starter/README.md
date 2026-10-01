@@ -11,7 +11,7 @@ chase the one anomaly through the client, learn the fix into memory — and then
 
 ## Run (2 commands)
 ```bash
-npm install        # only dependency: zod
+npm install        # installs Zod plus the Redis client
 npm start          # serves http://localhost:5173
 ```
 Open http://localhost:5173 and press **▶ Run demo**. The path plays across the
@@ -34,7 +34,7 @@ Hand these two files to your coding tool as the contract when generating anythin
 
 ## What is real vs mocked
 - **Real & runnable:** contracts, the 7 seat manifests, the Job Card Compiler
-  (validate + emit OpenClaw skill), the event bus, evidence + knowledge stores,
+  (validate + emit OpenClaw skill), the durable A2A/UI buses, evidence + knowledge stores,
   the batch validator + classifier, the VAT-filing scenario, the 5-view UI, SSE streaming.
 - **Real connectors (examples):** `connectors/fattureInCloud.mjs` (OAuth2) and
   `connectors/whatsapp.mjs` (Bearer). Set env vars to go live; otherwise offline stubs run.
@@ -48,9 +48,9 @@ Hand these two files to your coding tool as the contract when generating anythin
    with a real edge-SLM/LLM call over each seat’s Job Description + Routine, validated by `ManifestSchema`.
 2. `backend/connectors/*` → the **IT Expert’s** job. FiC + WhatsApp are already real;
    wire the AdE portal (keep it prepare-only) and the bank feed, keeping the signatures.
-3. `backend/bus.mjs` → Redis Streams / NATS. Enforce `refuses`/`gate` at the tool layer
-   (security-critical — the AdE transmission must stay human-gated).
-4. Memory → back the stores with LanceDB / memory-wiki; add real signing keys in
+3. Finish migrating non-pilot agent operations into the runtime registry while
+   keeping tool calls behind centralized guardrails.
+4. Memory → back the stores with LanceDB / memory-wiki; add Ed25519 signing keys in
    `contracts/a2aSchema.mjs` (replace the sha256 stub).
 5. Wire the edge SLM (Qwen3.5) + Kimi fallback; keep the frontend as-is (it only reads /events).
 
@@ -96,4 +96,10 @@ REDIS_URL=redis://127.0.0.1:6379 npm run test:redis
 ```
 
 Transport status and sanitized dead-letter metadata are available from
-`/api/a2a-health` and `/api/a2a-dead-letters`.
+`/api/a2a-health` and `/api/a2a-dead-letters`. After repairing the underlying
+consumer, replay one entry with `POST /api/a2a-dead-letters/:id/replay`.
+Replay requires the `A2A_OPERATOR_TOKEN` Bearer credential.
+
+Phase 5 moved the active `lo_smistatore` and `l_amministrativo` recipients out
+of the HTTP/UI subscriber path and into durable runtime consumers. Generic
+`publish("a2a", ...)` is rejected; every A2A producer must call `publishA2A()`.

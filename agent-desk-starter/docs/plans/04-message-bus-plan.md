@@ -3,15 +3,17 @@
 **Status: implemented (roadmap Phase 4).** Redis Streams is the selected durable
 production adapter; the deterministic in-memory adapter remains the default for
 tests and offline demos. Runtime-produced A2A messages use the durable facade.
-Legacy direct `publish("a2a", ...)` scenario/server producers remain UI-only
-compatibility calls and are explicitly scheduled for the Phase 5 cutover.
+Phase 5 migrated scenario/server producers and rejects legacy
+`publish("a2a", ...)` calls at the UI facade.
 
 Operational endpoints:
 
 - `GET /api/a2a-health` — connectivity, queued/pending counts, pending age,
   dead-letter count, and last transport error/success;
 - `GET /api/a2a-dead-letters` — sanitized failure metadata without message
-  payloads.
+  payloads;
+- `POST /api/a2a-dead-letters/:id/replay` — explicitly requeue one entry after
+  the underlying failure has been repaired.
 
 ## Goal
 
@@ -42,8 +44,8 @@ subscribeUi(handler)
 uiHistory(options)
 ```
 
-Legacy `publish/subscribe/history` can delegate to the UI side during migration.
-Publishing to channel `a2a` through the legacy API should eventually be rejected.
+Legacy `publish/subscribe/history` delegate to the UI side for telemetry.
+Publishing to channel `a2a` through the legacy API is rejected.
 
 ## Modules
 

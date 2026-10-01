@@ -151,6 +151,17 @@ export class A2ABus {
     return typeof this.transport.deadLetters === "function" ? this.transport.deadLetters(options) : [];
   }
 
+  async replayDeadLetter(id) {
+    await this.connect();
+    if (typeof id !== "string" || !id) throw new TypeError("Dead-letter ID is required.");
+    if (typeof this.transport.replayDeadLetter !== "function") {
+      throw new MessagingError("DEAD_LETTER_REPLAY_UNSUPPORTED", "The selected A2A transport does not support dead-letter replay.");
+    }
+    const replayed = await this.transport.replayDeadLetter(id);
+    if (!replayed) throw new MessagingError("DEAD_LETTER_NOT_FOUND", `Dead letter "${id}" was not found.`);
+    return replayed;
+  }
+
   async close() {
     if (this.closed) return;
     this.closed = true;

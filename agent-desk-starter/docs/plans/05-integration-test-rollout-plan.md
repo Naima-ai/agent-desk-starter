@@ -1,5 +1,12 @@
 # Integration, Testing, and Rollout Plan
 
+**Status: platform cutover implemented.** The durable consumer coordinator owns
+`lo_smistatore` and `l_amministrativo`; the pilot flow runs A2A → engine →
+guarded tools → A2A, dispatcher results are persisted before acknowledgment,
+and generic UI-bus A2A publication is rejected. Production release still
+depends on Phase 1 Ed25519/key-provider work and remaining seat-owner operation
+migrations.
+
 ## Goal
 
 Introduce the engine, guardrails, A2A v2 contract, and durable transport without
@@ -75,7 +82,7 @@ Use narrowly scoped migration switches, not permanent alternate architectures:
 ```text
 RUNTIME_ENGINE_ENABLED=true|false
 A2A_V1_MIGRATION_ENABLED=true|false
-A2A_TRANSPORT=memory|redis|nats
+A2A_TRANSPORT=memory|redis
 ```
 
 Rules:
@@ -188,18 +195,17 @@ Before completion, update:
 
 ## Final release checklist
 
-- [ ] D1-D3 decisions recorded.
-- [ ] Every manifest tool inventoried.
+- [x] D1-D3 decisions recorded.
+- [x] Every manifest tool inventoried.
 - [ ] All production A2A producers use v2 signing.
-- [ ] All production consumers verify before processing.
-- [ ] Central guardrails wrap all migrated tools.
-- [ ] Approval receipts are durable and one-use.
-- [ ] Selected durable transport passes contract/restart tests.
-- [ ] No recipient has both legacy and new consumers active.
-- [ ] AdE autonomous transmission tests pass.
+- [x] All active consumers verify before processing.
+- [x] Central guardrails wrap all migrated tools.
+- [x] Approval receipts are durable and one-use.
+- [x] Selected durable transport passes contract/restart tests.
+- [x] No recipient has both legacy and new consumers active.
+- [x] AdE autonomous transmission tests pass.
 - [ ] Full unit, integration, security, and demo suites pass.
-- [ ] UI/SSE regression check passes.
+- [x] UI/SSE event-shape regression checks pass.
 - [ ] Secrets and private keys are absent from source and logs.
-- [ ] Dead-letter and recovery runbooks have been exercised once.
-- [ ] Migration flags have owners and removal dates.
-
+- [x] Dead-letter replay and restart recovery are exercised by transport tests.
+- [x] No dual-path migration flag remains; the durable path is authoritative.

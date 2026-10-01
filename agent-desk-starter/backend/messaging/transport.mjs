@@ -8,10 +8,9 @@ export class TransportError extends Error {
 }
 
 export function assertTransport(transport) {
-  const required = ["connect", "close", "health", "publish", "consume", "ack", "nack", "recover", "deadLetter"];
+  const required = ["connect", "close", "health", "publish", "consume", "ack", "nack", "recover", "deadLetter", "replayDeadLetter"];
   for (const method of required) {
     if (typeof transport?.[method] !== "function") throw new TypeError(`A2A transport must implement ${method}().`);
   }
   return transport;
 }
-

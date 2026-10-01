@@ -212,6 +212,17 @@ export class RedisStreamsTransport {
     return entries.map((entry) => ({ id: entry.id, ...entry.message }));
   }
 
+  async replayDeadLetter(id) {
+    const entries = await this.client.xRange(this.deadLetterKey(), id, id, { COUNT: 1 });
+    const entry = entries[0];
+    if (!entry) return null;
+    const persisted = await this.publish(entry.message.recipient, entry.message.payload, {
+      messageId: entry.message.messageId || null,
+    });
+    await this.client.xDel(this.deadLetterKey(), id);
+    return { ...persisted, replayedDeadLetterId: id };
+  }
+
   async health() {
     let queued = 0;
     let pending = 0;
