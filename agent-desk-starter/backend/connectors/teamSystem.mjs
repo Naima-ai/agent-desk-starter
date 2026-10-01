@@ -1,7 +1,7 @@
 // backend/connectors/teamSystem.mjs
 // TeamSystem connector — now backed by a real HTTP pipeline to the
 // TeamSystem Firm mock (../../../teamsystem-firm-mock), which plays the
-// studio's own IT system: 10 real clients, real VAT batches, FatturaPA-
+// studio's own IT system: 11 real clients, real VAT batches, FatturaPA-
 // shaped XML. If that service isn't running, every function falls back to
 // the single local fixture client (seed.mjs) with a console warning, so
 // `npm start` here still works standalone for anyone who hasn't started the
