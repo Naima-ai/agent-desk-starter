@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Loop x TeamSystem — Agent Desk demo starter (mock-first). Pre-filing VAT validation to the Agenzia, human-gated. Swap mocks for real integrations to complete.",
   "scripts": {
-    "start": "node backend/server.mjs",
+    "start": "node --env-file=.env backend/server.mjs",
     "check": "node --check backend/server.mjs",
     "test": "node --test"
   },
