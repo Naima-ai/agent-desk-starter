@@ -21,6 +21,9 @@ import { onLadderEvent as onClassificationLadderEvent } from "./classificationGa
 import { route } from "./smistatore.mjs";
 import { getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry } from "./rosterStore.mjs";
 import * as archivista from "./archivista.mjs";
+import { defaultApprovalStore } from "./runtime/approvalStore.mjs";
+import { defaultAgentEngine } from "./runtime/agentEngine.mjs";
+import { defaultA2ABus } from "./messaging/a2aBus.mjs";
 
 // Bridge both L'Amministrativo's (owner-approval, WhatsApp-facing) and Il
 // Classificatore's (studio-internal) reminder/escalation ladders onto the
@@ -137,6 +140,34 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === "/api/a2a-health" && req.method === "GET") {
+    try {
+      const status = await defaultA2ABus.health();
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(status));
+    } catch (error) {
+      res.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({
+        connected: false, error: String(error?.message || error),
+      }));
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/a2a-dead-letters" && req.method === "GET") {
+    try {
+      const records = (await defaultA2ABus.deadLetters({ count: 100 })).map((record) => ({
+        id: record.id,
+        messageId: record.messageId || null,
+        recipient: record.recipient || null,
+        failure: typeof record.failure === "string" ? JSON.parse(record.failure) : record.failure,
+        at: record.at || null,
+      }));
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(records));
+    } catch (error) {
+      res.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(error?.message || error) }));
+    }
+    return;
+  }
+
   if (url.pathname === "/api/run-demo" || url.pathname === "/api/run-golden-path") {
     const clientId = url.searchParams.get("client") || "rossi_srl";
     // Never let a failure anywhere in the pipeline become an unhandled
@@ -172,20 +203,38 @@ const server = createServer(async (req, res) => {
 
   // ---- owner-approval gate API (used by L'Amministrativo's draftAndSendInvoice) ----
   if (url.pathname === "/api/gates" && req.method === "GET") {
-    const list = [...pendingGates.values()].map((t) => ({ id: t.id, clientId: t.clientId, action: t.action, payload: t.payload, status: t.status, remindersSent: t.remindersSent, escalated: t.escalated }));
+    const legacy = [...pendingGates.values()].map((t) => ({ id: t.id, clientId: t.clientId, action: t.action, payload: t.payload, status: t.status, remindersSent: t.remindersSent, escalated: t.escalated, kind: "legacy" }));
+    const runtime = (await defaultApprovalStore.list({ status: "pending" })).map((approval) => ({
+      id: approval.id, clientId: approval.clientId, seat: approval.seat, action: approval.action,
+      toolId: approval.toolId, status: approval.status, requiredApprover: approval.requiredApprover,
+      createdAt: approval.createdAt, expiresAt: approval.expiresAt, payload: { runId: approval.runId },
+      remindersSent: 0, escalated: false, kind: "runtime",
+    }));
+    const list = [...legacy, ...runtime];
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
     return;
   }
   const gateMatch = url.pathname.match(/^\/api\/gate\/([^/]+)\/(approve|deny)$/);
   if (gateMatch && req.method === "POST") {
     const [, id, action] = gateMatch;
-    const ticket = pendingGates.get(id);
-    if (!ticket) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such gate" })); return; }
     const body = await readBody(req);
-    const { approvedBy, reason } = body ? JSON.parse(body) : {};
+    const { approvedBy, approverRole, reason } = body ? JSON.parse(body) : {};
     try {
-      if (action === "approve") ticket.approve(approvedBy || "owner"); else ticket.deny(reason);
-      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id, action }));
+      const ticket = pendingGates.get(id);
+      if (ticket) {
+        if (action === "approve") ticket.approve(approvedBy || "owner"); else ticket.deny(reason);
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id, action, kind: "legacy" }));
+        return;
+      }
+      const approval = await defaultApprovalStore.get(id);
+      if (!approval) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such gate" })); return; }
+      const resolved = action === "approve"
+        ? await defaultApprovalStore.approve(id, { approvedBy, approverRole })
+        : await defaultApprovalStore.deny(id, { deniedBy: approvedBy || "operator", reason });
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+        ok: true, id, action, kind: "runtime", status: resolved.status,
+        resume: action === "approve" ? { runId: resolved.runId, instruction: "Rerun the same operation with the same runId and input." } : null,
+      }));
     } catch (e) {
       res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
     }
@@ -359,4 +408,18 @@ const server = createServer(async (req, res) => {
   } catch { res.writeHead(404).end("Not found"); }
 });
 
+// Fail startup if an enabled runtime seat advertises a business tool that has
+// no registered implementation, or if an operation declares a tool outside
+// its manifest. A2A endpoint/handoff entries are messaging capabilities.
+await defaultAgentEngine.validateConfiguration();
 server.listen(PORT, () => console.log(`Agent Desk starter on http://localhost:${PORT}`));
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await new Promise((resolve) => server.close(resolve));
+  await defaultA2ABus.close();
+}
+process.once("SIGINT", () => shutdown().finally(() => process.exit(0)));
+process.once("SIGTERM", () => shutdown().finally(() => process.exit(0)));

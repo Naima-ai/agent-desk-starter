@@ -1,13 +1,9 @@
-// backend/bus.mjs — tiny pub/sub. In production: Redis Streams / NATS.
-import { EventEmitter } from "node:events";
-const emitter = new EventEmitter();
-emitter.setMaxListeners(100);
-const log = [];
-export function publish(channel, event) {
-  const evt = { channel, ...event, at: new Date().toISOString() };
-  log.push(evt);
-  emitter.emit("evt", evt);
-  return evt;
-}
-export function subscribe(fn) { emitter.on("evt", fn); return () => emitter.off("evt", fn); }
-export function history() { return log.slice(); }
+// Compatibility facade. Domain-critical A2A uses messaging/a2aBus.mjs;
+// existing UI/demo call sites keep these synchronous telemetry wrappers until
+// the Phase 5 cutover removes legacy `publish("a2a", ...)` producers.
+export { publishUi, subscribeUi, uiHistory } from "./messaging/uiBus.mjs";
+import { publishUi, subscribeUi, uiHistory } from "./messaging/uiBus.mjs";
+
+export function publish(channel, event) { return publishUi(channel, event); }
+export function subscribe(listener) { return subscribeUi(listener); }
+export function history(options) { return uiHistory(options); }

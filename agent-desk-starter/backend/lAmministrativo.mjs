@@ -19,11 +19,10 @@ import { readSdiInbox } from "./connectors/sdiInbox.stub.mjs";
 import { draftInvoice } from "./connectors/fattureInCloudDraft.stub.mjs";
 import { startLadder } from "./escalationLadder.mjs";
 import { getActiveManifest } from "./compiler.mjs";
+import { assertStaticActionAllowed } from "./runtime/systemPolicy.mjs";
 import { EventEmitter } from "node:events";
 
 const SEAT = "l_amministrativo";
-
-const REFUSES = ["tax_advice", "payments", "send_to_authority", "contact_studio_staff"];
 
 // Reminder/escalation ladder — timing + visibility.
 // >>> TODO (real): read these from the client's configuration profile instead of a constant.
@@ -46,7 +45,7 @@ export const pendingQuestions = new Map();
 // not a prompt hint the model could talk itself around.
 //
 // The compiled manifest's `refuses` list is checked TOO, but only ever
-// ADDS restrictions on top of REFUSES above, never removes any — a job
+// ADDS restrictions on top of the immutable system policy, never removes any — a job
 // description compiled through a model (even a real one, let alone the
 // offline fallback) is not a trusted source for RELAXING a hard block. If
 // this ever read `manifest.refuses` as a replacement instead of a union,
@@ -55,10 +54,7 @@ export const pendingQuestions = new Map();
 // prompt-shaped suggestion this design explicitly says it isn't.
 // ---------------------------------------------------------------------------
 function assertAllowed(action) {
-  const manifestRefuses = getActiveManifest(SEAT)?.refuses || [];
-  if (REFUSES.includes(action) || manifestRefuses.includes(action)) {
-    throw new Error(`REFUSED: ${SEAT} will not perform "${action}" — hard block, not a suggestion.`);
-  }
+  assertStaticActionAllowed({ seat: SEAT, action, manifest: getActiveManifest(SEAT) });
 }
 
 export function executePayment() { assertAllowed("payments"); }
@@ -103,6 +99,12 @@ function findClientFactMatching(clientId, text) {
 // ---------------------------------------------------------------------------
 function toStudio(clientId, msg) {
   return makeMessage({ from: SEAT, to: "lo_smistatore", client: clientId, ...msg });
+}
+
+// Runtime adapters inject a guarded message capability here. Legacy callers use
+// the original direct constructor until their paths are migrated.
+function outbound(runtime, clientId, msg) {
+  return runtime?.toStudio ? runtime.toStudio(msg) : toStudio(clientId, msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -174,10 +176,13 @@ function skillEnabled(manifest, name) {
 }
 
 // 1. raccolta_documenti — document collection
-export async function collectDocument(manifest, clientId, expected) {
+export async function collectDocument(manifest, clientId, expected, runtime = null) {
   if (!skillEnabled(manifest, "raccolta_documenti")) return { skipped: true, skill: "raccolta_documenti" };
 
-  const [movements, inbox] = await Promise.all([bankFeed.movements(), readSdiInbox(clientId)]);
+  const [movements, inbox] = await Promise.all([
+    runtime?.movements ? runtime.movements() : bankFeed.movements(),
+    runtime?.readInbox ? runtime.readInbox() : readSdiInbox(clientId),
+  ]);
   const found =
     inbox.find((d) => d.supplier === expected.supplier && d.period === expected.period) ||
     movements.find((m) => m.desc?.includes(expected.supplier));
@@ -190,7 +195,7 @@ export async function collectDocument(manifest, clientId, expected) {
     return {
       found: true,
       evidence: ev,
-      a2a: toStudio(clientId, { type: "document_delivered", doc: `${expected.docType} ${expected.supplier}`, sdiId: found.sdiId }),
+      a2a: outbound(runtime, clientId, { type: "document_delivered", doc: `${expected.docType} ${expected.supplier}`, sdiId: found.sdiId }),
     };
   }
 
@@ -201,40 +206,47 @@ export async function collectDocument(manifest, clientId, expected) {
     status: "pending", remindersSent: 0, escalated: false,
     createdAt: new Date().toISOString(),
   };
+  const ping = () => runtime?.sendOwner
+    ? runtime.sendOwner("request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period })
+    : wa.sendTemplate("owner", "request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period });
+  await ping();
   pendingDocumentRequests.set(requestId, request);
 
-  const ping = () => wa.sendTemplate("owner", "request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period });
-  await ping();
-
-  const ladderCfg = expected.ladder || {};
-  const ladder = startLadder({
-    reminderDelaysMs: ladderCfg.reminderDelaysMs ?? DEFAULT_LADDER.reminderDelaysMs,
-    escalateAfterMs: ladderCfg.escalateAfterMs ?? DEFAULT_LADDER.escalateAfterMs,
-    onRemind: async (n) => {
-      if (request.status !== "pending") return; // resolved between the timer firing and now — no-op
-      request.remindersSent = n;
-      await ping();
-      emitLadderEvent({ kind: "document_request", event: "reminder", requestId, clientId, n });
-    },
-    onEscalate: () => {
-      if (request.status !== "pending") return;
-      request.escalated = true;
-      request.escalation = toStudio(clientId, {
-        type: "escalation_requested",
-        reason: `Missing ${expected.docType} from ${expected.supplier} (${expected.period}) unresolved after ${request.remindersSent} reminder(s).`,
-      });
-      emitLadderEvent({ kind: "document_request", event: "escalate", requestId, clientId, escalation: request.escalation });
-      // Escalating tells the studio; it does not fabricate the document or resolve the request itself — 
-      // resolveDocumentRequest() still needs a real answer to close it.
-    },
-  });
-  request._ladder = ladder;
+  // A runtime run is bounded and closes after returning, so it must not retain
+  // its guarded tool context inside 15/45/90-second timer callbacks. Durable
+  // reminder scheduling will be a separate correlated bus trigger. Legacy
+  // callers retain the existing in-process ladder in the meantime.
+  if (runtime?.scheduleLadder !== false) {
+    const ladderCfg = expected.ladder || {};
+    const ladder = startLadder({
+      reminderDelaysMs: ladderCfg.reminderDelaysMs ?? DEFAULT_LADDER.reminderDelaysMs,
+      escalateAfterMs: ladderCfg.escalateAfterMs ?? DEFAULT_LADDER.escalateAfterMs,
+      onRemind: async (n) => {
+        if (request.status !== "pending") return; // resolved between the timer firing and now — no-op
+        request.remindersSent = n;
+        await ping();
+        emitLadderEvent({ kind: "document_request", event: "reminder", requestId, clientId, n });
+      },
+      onEscalate: () => {
+        if (request.status !== "pending") return;
+        request.escalated = true;
+        request.escalation = outbound(runtime, clientId, {
+          type: "escalation_requested",
+          reason: `Missing ${expected.docType} from ${expected.supplier} (${expected.period}) unresolved after ${request.remindersSent} reminder(s).`,
+        });
+        emitLadderEvent({ kind: "document_request", event: "escalate", requestId, clientId, escalation: request.escalation });
+        // Escalating tells the studio; it does not fabricate the document or resolve the request itself —
+        // resolveDocumentRequest() still needs a real answer to close it.
+      },
+    });
+    request._ladder = ladder;
+  }
 
   return {
     found: false,
     askedOwner: true,
     requestId,
-    a2a: toStudio(clientId, { type: "item_missing", expected: `${expected.docType} ${expected.supplier}`, period: expected.period, urgency: "normal" }),
+    a2a: outbound(runtime, clientId, { type: "item_missing", expected: `${expected.docType} ${expected.supplier}`, period: expected.period, urgency: "normal" }),
   };
 }
 
@@ -305,11 +317,11 @@ export async function trackDeadline(manifest, clientId, deadline) {
 }
 
 // 7. domande_allo_studio — questions to the studio (the one approved contact path)
-export async function askStudio(manifest, clientId, topic, body) {
+export async function askStudio(manifest, clientId, topic, body, runtime = null) {
   if (!skillEnabled(manifest, "domande_allo_studio")) return { skipped: true, skill: "domande_allo_studio" };
   const questionId = `q_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
   pendingQuestions.set(questionId, { id: questionId, clientId, topic, body, status: "pending", askedAt: new Date().toISOString() });
-  return { questionId, a2a: toStudio(clientId, { type: "question_for_studio", topic, body }) };
+  return { questionId, a2a: outbound(runtime, clientId, { type: "question_for_studio", topic, body }) };
 }
 
 /* Call this when the studio answers (answer_with_evidence). 
@@ -341,13 +353,13 @@ export function resolveQuestionById(questionId, { answer, evidenceId } = {}) {
 // Inbound: a typed `instruction_from_studio` A2A message arrives via Lo Smistatore. 
 // This is the entry point the bus/scenario should call when that message type lands for this seat.
 // ------------------------------------------------------------------------------------------------
-export async function handleInstructionFromStudio(manifest, clientId, message) {
-  const ack = toStudio(clientId, { type: "acknowledgment", ref: (message.instruction || "instruction").slice(0, 60) });
+export async function handleInstructionFromStudio(manifest, clientId, message, runtime = null) {
+  const ack = outbound(runtime, clientId, { type: "acknowledgment", ref: (message.instruction || "instruction").slice(0, 60) });
 
   const m = /fetch (.+) for (.+)/i.exec(message.instruction || "");
   if (m) {
     const [, supplierGuess, period] = m;
-    const result = await collectDocument(manifest, clientId, { docType: "invoice", supplier: supplierGuess.trim(), period: period.trim() });
+    const result = await collectDocument(manifest, clientId, { docType: "invoice", supplier: supplierGuess.trim(), period: period.trim() }, runtime);
     return { ack, ...result };
   }
 
@@ -356,7 +368,7 @@ export async function handleInstructionFromStudio(manifest, clientId, message) {
     return {
       ack,
       answeredFromMemory: true,
-      a2a: toStudio(clientId, {
+      a2a: outbound(runtime, clientId, {
         type: "answer_with_evidence",
         answer: `${known.key.split(":").slice(2).join(":")}: ${JSON.stringify(known.value)}`,
         evidenceId: known.evidenceId || "unknown",
@@ -364,7 +376,7 @@ export async function handleInstructionFromStudio(manifest, clientId, message) {
     };
   }
 
-  const result = await askStudio(manifest, clientId, "unrecognised_instruction", message.instruction);
+  const result = await askStudio(manifest, clientId, "unrecognised_instruction", message.instruction, runtime);
   return { ack, ...result };
 }
 

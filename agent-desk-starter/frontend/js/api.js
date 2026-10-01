@@ -97,7 +97,7 @@
   const getTsClients          = () => getJSON("/api/ts-clients");
   const getGatewayStatus       = () => getJSON("/api/gateway-status");
   const getGates               = () => getJSON("/api/gates");
-  const approveGate            = (id, approvedBy) => postJSON(`/api/gate/${id}/approve`, { approvedBy });
+  const approveGate            = (id, approvedBy, approverRole) => postJSON(`/api/gate/${id}/approve`, { approvedBy, approverRole });
   const denyGate                = (id, reason) => postJSON(`/api/gate/${id}/deny`, { reason });
   const getDocumentRequests    = () => getJSON("/api/document-requests");
   const resolveDocumentRequest = (id, sdiId) => postJSON(`/api/document-requests/${id}/resolve`, { sdiId });

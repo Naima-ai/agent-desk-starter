@@ -498,7 +498,11 @@
     const approverFor = (action) => (action === "confirm_classification" ? "studio_professional" : "owner_mario");
     const GATE_LABEL = { confirm_classification: "Confirm classification", invoice: "Send invoice" };
 
-    const onApprove = async (id, action) => { await approveGate(id, approverFor(action)); refresh(); };
+    const onApprove = async (gate) => {
+      const approverRole = gate.requiredApprover || (gate.action === "confirm_classification" ? "studio_professional" : "owner");
+      await approveGate(gate.id, approverFor(gate.action), approverRole);
+      refresh();
+    };
     const onDeny = async (id) => { await denyGate(id, "declined in demo"); refresh(); };
     const onReceived = async (id) => { await resolveDocumentRequest(id, "IT" + Math.floor(Math.random() * 900 + 100)); refresh(); };
     const onSimulateReply = async (id) => { await resolveQuestion(id); refresh(); }; // no answer/evidenceId -> server fills a plausible default, same spirit as "Mark received"
@@ -513,7 +517,7 @@
               g.escalated && h("span", { className: "pill-escalated" }, "escalated to Lo Smistatore")),
             h("div", { className: "payload-line" }, JSON.stringify(g.payload)),
             h("div", { className: "approval-actions" },
-              h("button", { className: "btn-approve", onClick: () => onApprove(g.id, g.action) }, "Approve"),
+              h("button", { className: "btn-approve", onClick: () => onApprove(g) }, "Approve"),
               h("button", { className: "btn-deny", onClick: () => onDeny(g.id) }, "Deny")))),
 
       h("h3", { className: "section-title" }, "Document requests"),

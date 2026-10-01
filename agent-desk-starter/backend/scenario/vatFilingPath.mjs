@@ -12,7 +12,7 @@ import * as archivista from "../archivista.mjs";
 import * as teamSystem from "../connectors/teamSystem.mjs";
 import * as ade from "../connectors/adePortal.mjs";
 import * as La from "../lAmministrativo.mjs";
-import { getActiveManifest } from "../compiler.mjs";
+import { runAgent } from "../runtime/agentEngine.mjs";
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const a2a = (m) => publish("a2a", { message: makeMessage(m) });
@@ -41,14 +41,6 @@ function describeAnomaly(an) {
 
 export async function runVatFilingPath(clientId = "rossi_srl") {
   publish("board", { step: "start", label: "Pre-filing validation started" });
-
-  // Whatever was last compiled for L'Amministrativo (Agent page, or POST
-  // /api/compile/l_amministrativo) — falls back to the pre-written seed
-  // manifest if nothing's been compiled yet this server session. This is
-  // what makes compiling a seat actually MEAN something for skills (which
-  // of the 7 are switched on): a fixed static import never changed, no
-  // matter what you compiled.
-  const lAmministrativoManifest = getActiveManifest("l_amministrativo");
 
   // 1 — TeamSystem compiles the periodic VAT/LIPE/F24 batch from the ledger,
   // and hands over the client's master data + chart of accounts (the
@@ -144,19 +136,25 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
       continue;
     }
 
+    const instruction = `fetch ${an.expected.replace(/^invoice\s+/, "")} for ${an.period}`;
     a2a({ type: "instruction_from_studio", from: "lo_smistatore", to: "l_amministrativo", client: vatBatch.client,
-          instruction: `fetch ${an.expected.replace(/^invoice\s+/, "")} for ${an.period}`, due: an.period });
+          instruction, due: an.period });
     feed("lo_smistatore", `Anomaly routed to the client agent: ${an.expected}.`);
     await wait(600);
 
     // Checks the bank feed + SDI inbox first; 
-    // if genuinely missing it opens a tracked request with its own reminder/escalation ladde.
-    const result = await La.handleInstructionFromStudio(lAmministrativoManifest, vatBatch.client, {
-      instruction: `fetch ${an.expected.replace(/^invoice\s+/, "")} for ${an.period}`,
+    // if genuinely missing it opens a tracked request. Long-lived reminders
+    // move to correlated durable-bus triggers in the messaging phase.
+    const instructionRun = await runAgent({
+      seat: "l_amministrativo",
+      operation: "handle_instruction",
+      input: { message: { instruction, due: an.period } },
+      context: { clientId: vatBatch.client, actor: "agent:lo_smistatore" },
     });
-
-    if (result.ack) publish("a2a", { message: result.ack }); // acknowledged before any of the actual work below
-    if (result.a2a) publish("a2a", { message: result.a2a });
+    if (instructionRun.status !== "completed") {
+      throw new Error(`Runtime could not handle the studio instruction: ${instructionRun.error?.code || instructionRun.status}`);
+    }
+    const result = instructionRun.artifacts[0];
 
     if (result.askedOwner) {
       feed("l_amministrativo", `Missing invoice not on file — asked the owner on WhatsApp (request ${result.requestId}).`);
@@ -191,7 +189,19 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
       ? "Re-checked after the fixes — everything is now correct"
       : `Re-checked after the fixes — ${stillOpen} item${stillOpen === 1 ? "" : "s"} still need${stillOpen === 1 ? "s" : ""} attention`,
   });
-  const prepared = await ade.prepareSubmission(vatBatch);
+  // The preparation step now crosses the real runtime boundary: the engine
+  // loads L'Addetto IVA's active manifest, confirms `ade.prepare_only` is an
+  // allowed registered tool, applies guardrails, and validates the artifact.
+  const preparationRun = await runAgent({
+    seat: "l_addetto_iva",
+    operation: "prepare_submission",
+    input: { batch: vatBatch },
+    context: { clientId: vatBatch.client, actor: "system" },
+  });
+  if (preparationRun.status !== "completed") {
+    throw new Error(`Runtime could not prepare the AdE submission: ${preparationRun.error?.code || preparationRun.status}`);
+  }
+  const prepared = preparationRun.artifacts[0];
   feed("l_addetto_iva", `Batch re-assembled and pre-validated (${prepared.protocolDraft}). Ready for signature.`, "good");
   await wait(600);
 
