@@ -4,13 +4,23 @@
 // chart-of-accounts shape this mock serves: { code, name, type, rate, natura }.
 //
 // Odoo's CSV has no account -> VAT rate column (its tax model lives on the
-// transaction, not the account), so the rate/natura below is a judgment call
-// per account, made the same way the 10 hand-built clients were:
-//   - goods & services bought/sold normally            -> 22%
-//   - insurance, postal, bank fees, interest, rent     -> 0% + N4 (art. 10 DPR 633/1972)
-//   - balance-sheet, payroll, depreciation, provisions,
-//     taxes, inventory movements, closing accounts     -> rate null (no invoices
-//     land there, so CST-04 has nothing to check)
+// transaction, not the account), so rate/natura is assigned per account here,
+// following the Rulebook's rate table (Table A, DPR 633/1972) — the rate
+// follows the nature of the good/service, not the seller's choice:
+//   22%          ordinary rate — the default for any good/service not
+//                expressly assigned a reduced rate
+//   10%          Table A Part III — processed food, many medicines, restaurant/
+//                hotel, passenger transport, DOMESTIC electricity & gas, ...
+//   5%           Table A Part II-bis — social-health services, hygiene and
+//                infant products, ...
+//   4%           Table A Part II — basic necessities, books/newspapers, ...
+//   0% + Natura  no VAT applied (excluded/non-taxable/exempt/...) — needs a
+//                Natura code, not a rate
+// None of Odoo's 189 generic accounts is dedicated to a 10/5/4% good or
+// service, so every rated account here is either 22% or 0% + N4 (art. 10
+// exempt). Accounts no invoice is ever posted to (balance sheet, payroll,
+// depreciation, provisions, taxes, inventory movements, closing accounts)
+// get rate null, so CST-04 has nothing to check there.
 //
 // Run: node scripts/build-odoo-italian-chart.mjs  (rewrites backend/data/odooItalianChart.mjs)
 import { readFileSync, writeFileSync } from "node:fs";
@@ -39,7 +49,9 @@ const STANDARD_22 = new Set([
   // purchases of goods (incl. returns/discounts, which carry the same rate)
   "4101", "4102", "4105", "4110", "4111", "4112",
   // services
-  "4201", "4202", "4203", "4204", "4206", "4208", "4209", "4210", "4211", "4212",
+  "4201", // freight is 22%; only PASSENGER transport is 10%
+  "4202", // business energy is 22%; the 10% rate is for DOMESTIC electricity & gas
+  "4203", "4204", "4206", "4208", "4209", "4210", "4211", "4212",
   "4302", // leasing
   // sales
   "3101", "3103", "3110", "3111", "3112", "3202",
@@ -60,6 +72,14 @@ const chart = rows.map((r) => {
     : { rate: null, natura: null };
   return { code, name: r[col("name@it")] || r[col("name")], type: r[col("account_type")], ...vat };
 });
+
+// Guard: nothing outside the Rulebook's rate table gets into the chart.
+const RULEBOOK_RATES = [22, 10, 5, 4];
+for (const c of chart) {
+  if (c.rate === null) continue;
+  const ok = c.rate === 0 ? Boolean(c.natura) : RULEBOOK_RATES.includes(c.rate) && !c.natura;
+  if (!ok) throw new Error(`account ${c.code}: rate ${c.rate}% / natura ${c.natura} is not admissible under the Rulebook rate table`);
+}
 
 const body = chart.map((c) => `  { ${Object.entries(c).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(", ")} },`).join("\n");
 writeFileSync(`${root}backend/data/odooItalianChart.mjs`,
