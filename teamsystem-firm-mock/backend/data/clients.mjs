@@ -1,15 +1,17 @@
-// backend/data/clients.mjs — the TeamSystem Firm's client book: 10 clients,
+// backend/data/clients.mjs — the TeamSystem Firm's client book: 11 clients,
 // each with master data, a chart of accounts, and one quarter's VAT batch.
 // Real taxpayer data isn't public (per the brief) — every P.IVA here is
 // synthetic but passes the real Italian check-digit algorithm, computed, not
 // guessed. Each client is built to demonstrate ONE specific edge case from
 // the Rulebook, not a pile of unrelated problems on top of each other — that
-// makes each one legible on its own, and three are deliberately clean
+// makes each one legible on its own, and four are deliberately clean
 // (a system that only ever finds problems isn't trustworthy either).
 //
 // `edgeCase` on each client is documentation, not data the system reads —
 // it's here so anyone opening this file knows why that client looks the way
 // it does, and which Rulebook rule it's there to exercise.
+
+import { odooItalianChart } from "./odooItalianChart.mjs";
 
 const PERIOD = "2026-Q3";
 const PRIOR_PERIOD = "2026-Q2";
@@ -193,6 +195,36 @@ export const clients = [
       { id: "L1", supplier: "Fornitore PA Srl", desc: "Fornitura per ente pubblico", net: 10000.0, vat: 2200.0, account: "30.10", confidence: 0.92, date: "2026-08-22", splitPayment: true, legalWording: null },
     ],
     expected: [],
+  },
+
+  // ---- 11. Azienda Generale Srl — a realistic, full-size book: the real
+  // 189-account Italian chart from Odoo's l10n_it localization (see
+  // odooItalianChart.mjs), not a 1–5 account chart built around one rule.
+  // Clean on purpose: it's here to stress-test the validator and classifier
+  // against a real business's chart, so a correct run should PASS. ----
+  {
+    id: "azienda_generale", name: "Azienda Generale Srl", regime: "ordinaria", sourceFormat: "json",
+    piva: "07890123453", codiceFiscale: "07890123453", ateco: "46.69.99",
+    edgeCase: "Realistic full chart (189 real Odoo l10n_it accounts) — mixed 22% and N4-exempt costs — should PASS (scale/positive case)",
+    chartOfAccounts: odooItalianChart,
+    period: PERIOD,
+    lines: [
+      { id: "L1", supplier: "Grossista Lombardo Srl", desc: "Acquisto merce per rivendita", net: 6400.0, vat: 1408.0, account: "4101", confidence: 0.95, date: "2026-07-08" },
+      { id: "L2", supplier: "Enel Energia", desc: "Fornitura energia elettrica luglio", net: 780.0, vat: 171.6, account: "4202", confidence: 0.97, date: "2026-07-31" },
+      { id: "L3", supplier: "Vodafone Italia", desc: "Telefonia mobile aziendale", net: 145.0, vat: 31.9, account: "4206", confidence: 0.96, date: "2026-08-03" },
+      { id: "L4", supplier: "Studio Commerciale Neri", desc: "Consulenza fiscale trimestrale", net: 1800.0, vat: 396.0, account: "4204", confidence: 0.94, date: "2026-08-10" },
+      { id: "L5", supplier: "Generali Italia SpA", desc: "Polizza RC aziendale — rata semestrale", net: 1250.0, vat: 0, natura: "N4", account: "4207", confidence: 0.93, date: "2026-08-14" },
+      { id: "L6", supplier: "Immobiliare Duomo Srl", desc: "Canone locazione magazzino agosto", net: 2200.0, vat: 0, natura: "N4", account: "4301", confidence: 0.92, date: "2026-08-01" },
+      { id: "L7", supplier: "Officina Bassi Snc", desc: "Manutenzione furgone aziendale", net: 520.0, vat: 114.4, account: "4211", confidence: 0.91, date: "2026-09-04" },
+      { id: "L8", supplier: "Autonoleggi Nord SpA", desc: "Canone leasing automezzo settembre", net: 690.0, vat: 151.8, account: "4302", confidence: 0.95, date: "2026-09-10" },
+    ],
+    expected: [],
+    priorPeriod: PRIOR_PERIOD,
+    priorLines: [
+      { supplier: "Grossista Lombardo Srl", net: 6100.0, vat: 1342.0 },
+      { supplier: "Enel Energia", net: 820.0, vat: 180.4 },
+      { supplier: "Vodafone Italia", net: 145.0, vat: 31.9 },
+    ],
   },
 ];
 

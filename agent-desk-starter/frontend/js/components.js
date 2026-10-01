@@ -551,34 +551,115 @@
             h("span", { className: "text" }, e.gateId || e.requestId))))));
   }
 
-  // ---- Clients: real per-client data ingestion, not just a single "Run
-  // demo" button. Lists every client the TeamSystem Firm mock actually has
-  // (10 of them, each with real invoices/XML/VAT data), and validating one
-  // is a real fetch through the real pipeline, not a canned script. ----
-  function Clients({ onValidate, running, lastRunClientId }) {
-    const [clients, setClients] = useState(null);
+  // ---- Clients: search the TeamSystem Firm mock's client book, pick one,
+  // and only then load it. The tab doesn't dump every client on arrival —
+  // a real studio has hundreds, so you search (name, P.IVA, ATECO, regime),
+  // select a result, and get that client's master data + full chart of
+  // accounts, with Validate running its VAT batch through the real pipeline. ----
+  function matchesClient(c, q) {
+    if (!q) return true;
+    return [c.name, c.id, c.piva, c.ateco, c.regime].some((v) => String(v || "").toLowerCase().includes(q));
+  }
+
+  function rateLabel(a) {
+    if (a.natura) return `${a.rate}% · ${a.natura}`;
+    if (a.rate == null) return "\u2014";
+    return `${a.rate}%`;
+  }
+
+  function ClientDetail({ clientId, onValidate, running, lastRunClientId, onClose }) {
+    const [client, setClient] = useState(null);
     const [error, setError] = useState(null);
+    const [accountQuery, setAccountQuery] = useState("");
 
     useEffect(() => {
-      fetch("/api/ts-clients").then((r) => r.json()).then(setClients)
-        .catch((e) => setError(String(e)));
+      let cancelled = false;
+      setClient(null); setError(null); setAccountQuery("");
+      API().getTsClient(clientId).then((c) => { if (!cancelled) setClient(c); })
+        .catch((e) => { if (!cancelled) setError(String(e)); });
+      return () => { cancelled = true; };
+    }, [clientId]);
+
+    if (error) return h("div", { className: "panel" }, h(EmptyState, null, `Couldn't load ${clientId}: ${error}`));
+    if (!client) return h("div", { className: "panel" }, h(EmptyState, null, "Loading client\u2026"));
+
+    const chart = client.chartOfAccounts || [];
+    const q = accountQuery.trim().toLowerCase();
+    const shown = q ? chart.filter((a) => `${a.code} ${a.name} ${a.type || ""}`.toLowerCase().includes(q)) : chart;
+    const isRunning = running && lastRunClientId === client.id;
+
+    return h("div", { className: "panel client-detail" },
+      h("div", { className: "client-detail-head" },
+        h("div", { style: { flex: 1, minWidth: 0 } },
+          h("h2", { className: "client-detail-name" }, client.name),
+          h("div", { className: "text client-detail-meta" },
+            `${client.regime} \u00B7 ATECO ${client.ateco} \u00B7 P.IVA ${client.piva} \u00B7 ${client.period}`)),
+        h("div", { className: "client-detail-actions" },
+          h("button", { className: "btn-secondary", onClick: onClose }, "Change client"),
+          h("button", {
+            className: "btn-primary", disabled: running, onClick: () => onValidate(client.id), title: `Validate ${client.name}`,
+          }, isRunning ? "Running\u2026" : "Validate"))),
+      client.edgeCase && h("p", { className: "hint", style: { margin: "10px 0 0" } }, client.edgeCase),
+
+      h("div", { className: "client-coa-head" },
+        h("div", { className: "panel-title", style: { margin: 0 } },
+          "Chart of accounts ", h("span", { className: "panel-subtitle" }, q ? `${shown.length} of ${chart.length}` : `${chart.length} account${chart.length === 1 ? "" : "s"}`)),
+        chart.length > 8 && h("input", {
+          className: "text-input", type: "search", placeholder: "Filter accounts\u2026", value: accountQuery,
+          onChange: (e) => setAccountQuery(e.target.value), "aria-label": "Filter accounts",
+        })),
+      h("div", { className: "coa-table-wrap" },
+        h("table", { className: "coa-table" },
+          h("thead", null, h("tr", null, h("th", null, "Code"), h("th", null, "Account"), h("th", null, "VAT"))),
+          h("tbody", null,
+            shown.map((a) => h("tr", { key: a.code },
+              h("td", { className: "mono" }, a.code),
+              h("td", null, a.name, a.type && h("span", { className: "coa-type" }, a.type.replace(/_/g, " "))),
+              h("td", { className: "mono" }, rateLabel(a)))),
+            shown.length === 0 && h("tr", null, h("td", { colSpan: 3, className: "hint" }, "No accounts match."))))));
+  }
+
+  function Clients({ onValidate, running, lastRunClientId, selectedClientId, onSelectClient }) {
+    const [clients, setClients] = useState(null);
+    const [error, setError] = useState(null);
+    const [query, setQuery] = useState("");
+    const [submitted, setSubmitted] = useState(null); // null = no search run yet
+
+    useEffect(() => {
+      API().getTsClients().then(setClients).catch((e) => setError(String(e)));
     }, []);
 
     if (error) return h(EmptyState, null, `Couldn't reach the TeamSystem Firm mock: ${error}. Is it running (npm start in teamsystem-firm-mock)?`);
-    if (!clients) return h(EmptyState, null, "Loading clients from the TeamSystem Firm mock…");
+    if (!clients) return h(EmptyState, null, "Loading clients from the TeamSystem Firm mock\u2026");
+
+    if (selectedClientId) {
+      return h(ClientDetail, {
+        clientId: selectedClientId, onValidate, running, lastRunClientId, onClose: () => onSelectClient(null),
+      });
+    }
+
+    const results = submitted === null ? [] : clients.filter((c) => matchesClient(c, submitted));
+    const search = (e) => { e.preventDefault(); setSubmitted(query.trim().toLowerCase()); };
 
     return h("div", null,
-      h("div", { className: "panel" },
-        clients.map((c) => h("div", { className: "feed-row", key: c.id, style: { alignItems: "center" } },
-          h("div", { style: { flex: 1 } },
-            h("div", { style: { fontWeight: 600 } }, c.name),
-            h("div", { className: "text" }, `${c.regime} · ATECO ${c.ateco} · P.IVA ${c.piva} · ${c.lineCount} line(s) · ${c.period}`)),
-          h("button", {
-            className: "run-demo-btn compact",
-            disabled: running,
-            onClick: () => onValidate(c.id),
-            title: `Validate ${c.name}`,
-          }, running && lastRunClientId === c.id ? "Running…" : "Validate")))));
+      h("form", { className: "panel client-search", onSubmit: search, role: "search" },
+        h("label", { className: "field-label", htmlFor: "client-search-input" }, "Find a client"),
+        h("div", { className: "client-search-row" },
+          h("input", {
+            id: "client-search-input", className: "text-input", type: "search", autoFocus: true,
+            placeholder: "Name, P.IVA, ATECO or regime", value: query, onChange: (e) => setQuery(e.target.value),
+          }),
+          h("button", { className: "btn-primary", type: "submit" }, "Search")),
+        h("p", { className: "hint", style: { marginBottom: 0 } },
+          `${clients.length} clients in the TeamSystem book. Search with an empty box to browse them all.`)),
+
+      submitted !== null && h("div", { className: "panel", style: { marginTop: 16 } },
+        h("div", { className: "panel-title" }, `${results.length} result${results.length === 1 ? "" : "s"}`),
+        results.length === 0
+          ? h("p", { className: "hint", style: { margin: 0 } }, "No client matches that search.")
+          : results.map((c) => h("button", { className: "client-result", key: c.id, onClick: () => onSelectClient(c.id) },
+              h("div", { style: { fontWeight: 600 } }, c.name),
+              h("div", { className: "text" }, `${c.regime} \u00B7 ATECO ${c.ateco} \u00B7 P.IVA ${c.piva} \u00B7 ${c.lineCount} line(s) \u00B7 ${c.period}`)))));
   }
 
   // -------------------------------------------------------------- team --
