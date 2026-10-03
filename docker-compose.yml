@@ -1,0 +1,99 @@
+# Agent Desk — runs the whole stack with one command.
+#
+#   1. cp .env.docker.example .env      and set DESK_ACCESS_TOKEN (a long random string)
+#   2. docker compose up -d --build     (add --profile llm for the local Qwen model)
+#   3. open http://localhost:5173       and sign in with the token
+#
+# Only the two web UIs are published, and only on this machine (127.0.0.1).
+# To expose them, put a TLS reverse proxy (Caddy/nginx/Traefik) in front and set
+# PUBLIC_ORIGIN / TS_PUBLIC_ORIGIN + COOKIE_SECURE=true in .env.
+name: agent-desk
+
+x-hardening: &hardening
+  init: true
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  redis:
+    image: redis:7-alpine
+    <<: *hardening
+    # Run as the redis user from the start. (Starting as root with all capabilities dropped works
+    # on the first boot but fails on the next one: root can no longer read /data/appendonlydir.)
+    user: "999:1000"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  teamsystem:
+    build: ./teamsystem-firm-mock
+    image: teamsystem-mock:latest
+    <<: *hardening
+    environment:
+      DESK_ACCESS_TOKEN: ${DESK_ACCESS_TOKEN:?set DESK_ACCESS_TOKEN in .env (a long random string)}
+      AGENT_DESK_URL: http://agent-desk:5173
+      ALLOWED_ORIGINS: ${TS_PUBLIC_ORIGIN:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes: ["ts-state:/state"]
+    tmpfs: ["/tmp"]
+    ports: ["127.0.0.1:5680:5680"]
+
+  agent-desk:
+    build: ./agent-desk-starter
+    image: agent-desk:latest
+    <<: *hardening
+    depends_on:
+      redis: { condition: service_healthy }
+      teamsystem: { condition: service_healthy }
+    env_file:
+      - path: .env          # SMTP_*, IMAP_*, WHATSAPP_*, FIC_*, GEMINI_API_KEY ... (optional)
+        required: false
+    environment:
+      DESK_ACCESS_TOKEN: ${DESK_ACCESS_TOKEN:?set DESK_ACCESS_TOKEN in .env (a long random string)}
+      TS_FIRM_URL: http://teamsystem:5680
+      A2A_TRANSPORT: redis
+      REDIS_URL: redis://redis:6379
+      ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      LOCAL_SLM_URL: ${LOCAL_SLM_URL:-http://ollama:11434/v1/chat/completions}
+    volumes:
+      - agent-data:/app/data
+    tmpfs:
+      - /tmp
+      - /app/build:uid=1000,gid=1000
+    ports: ["127.0.0.1:5173:5173"]
+
+  # ---- optional local model: docker compose --profile llm up -d ----
+  ollama:
+    image: ollama/ollama:latest   # pin to a tested version/digest before production
+    profiles: [llm]
+    init: true
+    restart: unless-stopped
+    volumes: ["ollama-models:/root/.ollama"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: [llm]
+    depends_on:
+      ollama: { condition: service_healthy }
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "qwen2.5:3b"]
+    restart: "no"
+
+volumes:
+  redis-data:
+  ts-state:
+  agent-data:
+  ollama-models:

@@ -7,6 +7,7 @@ build/
 # `data/` pattern here used to silently exclude that file from the repo entirely.
 agent-desk-starter/data/
 teamsystem-firm-mock/backend/data/custom-clients.json
+teamsystem-firm-mock/backend/data/workflow-state.json
 # Runtime-uploaded PDF attachments — except the one seed data actually
 # references (data/clients.mjs's Subappalto client's contract).
 teamsystem-firm-mock/backend/attachments/*
@@ -15,3 +16,4 @@ teamsystem-firm-mock/backend/attachments/*
 Thumbs.db
 ~$*
 venv/
+teamsystem-firm-mock/backend/data/edits.json
