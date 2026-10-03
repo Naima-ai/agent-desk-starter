@@ -7,6 +7,7 @@ import { draftInvoice } from "../connectors/fattureInCloudDraft.stub.mjs";
 import { readSdiInbox } from "../connectors/sdiInbox.stub.mjs";
 import { readMasterData, readPriorPeriod, readVatBatch } from "../connectors/teamSystem.mjs";
 import { sendTemplate } from "../connectors/whatsapp.mjs";
+import { getOwnerPhone } from "../clientDirectory.mjs";
 import { handleInstructionFromStudio } from "../lAmministrativo.mjs";
 import { getRoster } from "../rosterStore.mjs";
 import { route } from "../smistatore.mjs";
@@ -248,7 +249,7 @@ export const defaultAgentRegistry = new AgentRegistry()
               readInbox: () => ctx.tools.invoke("sdi.inbox", { clientId: ctx.identity.clientId }),
               // The owner's number on file in TeamSystem; the literal "owner" only if none is recorded yet.
               sendOwner: async (template, vars) => ctx.tools.invoke("whatsapp.owner_employees", {
-                clientId: ctx.identity.clientId, to: (await readMasterData(ctx.identity.clientId)).phone || "owner", template, vars,
+                clientId: ctx.identity.clientId, to: process.env.WHATSAPP_TEST_RECIPIENT || (await readMasterData(ctx.identity.clientId)).phone || getOwnerPhone(ctx.identity.clientId), template, vars,
               }),
               toStudio: (message) => {
                 const { type, ...payload } = message;

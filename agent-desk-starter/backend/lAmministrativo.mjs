@@ -15,6 +15,7 @@ import * as evidence from "./memory/evidenceStore.mjs";
 import * as knowledge from "./memory/knowledgeStore.mjs";
 import * as bankFeed from "./connectors/bankFeed.mock.mjs";
 import * as wa from "./connectors/whatsapp.mjs";
+import { getOwnerPhone } from "./clientDirectory.mjs";
 import { readSdiInbox } from "./connectors/sdiInbox.stub.mjs";
 import { draftInvoice } from "./connectors/fattureInCloudDraft.stub.mjs";
 import { startLadder } from "./escalationLadder.mjs";
@@ -132,7 +133,7 @@ export function requestOwnerApproval(clientId, action, payload, ladderCfg = {}) 
     onRemind: async (n) => {
       if (ticket.status !== "pending") return;
       ticket.remindersSent = n;
-      await wa.sendTemplate("owner", "approval_reminder", { action, ...payload });
+      await wa.sendTemplate(getOwnerPhone(clientId), "approval_reminder", { action, ref: payload?.draftId ?? "n/a",});
       emitLadderEvent({ kind: "gate", event: "reminder", gateId: ticket.id, clientId, action, n });
     },
     onEscalate: () => {
@@ -208,7 +209,7 @@ export async function collectDocument(manifest, clientId, expected, runtime = nu
   };
   const ping = () => runtime?.sendOwner
     ? runtime.sendOwner("request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period })
-    : wa.sendTemplate("owner", "request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period });
+    : wa.sendTemplate(getOwnerPhone(clientId), "request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period });
   await ping();
   pendingDocumentRequests.set(requestId, request);
 
@@ -300,7 +301,7 @@ export async function draftAndSendInvoice(manifest, clientId, invoiceData, opts 
 // 3. incassi_e_solleciti — collections & reminders
 export async function sendReminder(manifest, clientId, debtor) {
   if (!skillEnabled(manifest, "incassi_e_solleciti")) return { skipped: true, skill: "incassi_e_solleciti" };
-  await wa.sendTemplate(debtor.contact || "owner", "payment_reminder", { debtor: debtor.name, amount: debtor.amount, due: debtor.due });
+  await wa.sendTemplate(debtor.contact || getOwnerPhone(clientId), "payment_reminder", { debtor: debtor.name, amount: debtor.amount, due: debtor.due });
   return { reminded: true, debtor: debtor.name };
 }
 
@@ -324,7 +325,7 @@ export async function trackDeadline(manifest, clientId, deadline) {
   if (!skillEnabled(manifest, "scadenze_pagamenti")) return { skipped: true, skill: "scadenze_pagamenti" };
   const daysLeft = Math.ceil((new Date(deadline.due) - Date.now()) / 86400000);
   if (daysLeft <= (deadline.reminderWindowDays ?? 3)) {
-    await wa.sendTemplate("owner", "deadline_reminder", { what: deadline.what, due: deadline.due });
+    await wa.sendTemplate(getOwnerPhone(clientId), "deadline_reminder", { what: deadline.what, due: deadline.due });
   }
   return { tracked: true, daysLeft };
 }
