@@ -4,6 +4,7 @@
 // Agenzia delle Entrate — the agent never transmits by itself.
 import { publish } from "../bus.mjs";
 import * as evidence from "../memory/evidenceStore.mjs";
+import * as clientMemory from "../memory/clientMemory.mjs";
 import { makeMessage } from "../../contracts/a2aSchema.mjs";
 import { validateBatch } from "../validator.mjs";
 import { classifyLine } from "../classifier.mjs";
@@ -42,12 +43,31 @@ function computeVatDeadline(periodId) {
  *  vatRules.mjs already writes into `message`, just without assuming the
  *  reader knows what a rule ID means. */
 function describeAnomaly(an) {
-  return an.message || `${an.kind.replace(/_/g, " ")}${an.supplier ? ` — ${an.supplier}` : ""}`;
+  if (an.message) return an.message;
+  if (an.kind === "item_missing" && an.expected) return `${an.expected} not received${an.period ? ` for ${an.period}` : ""}`;
+  return `${an.kind.replace(/_/g, " ")}${an.supplier ? ` — ${an.supplier}` : ""}`;
 }
 
 export async function runVatFilingPath(clientId = "rossi_srl") {
+  const run = clientMemory.beginRun(clientId);
+  try {
+    return await executeRun(clientId, run);
+  } catch (e) {
+    run.record("run_failed", { error: e.message });
+    clientMemory.finishRun(run, { failed: true, error: e.message });
+    throw e;
+  }
+}
+
+async function executeRun(clientId, run) {
   await startDefaultA2AConsumers();
   publish("board", { step: "start", label: "Pre-filing validation started" });
+
+  // Cortex memory, read FIRST: what the desk already knows about this client.
+  const prior = run.prior;
+  feed("l_archivista", prior.runs === 0
+    ? `Cortex memory: first validation run for this client — no history yet, learning starts now.`
+    : `Cortex memory: run #${prior.runs + 1} for this client. Last time: ${prior.last?.tail ?? "?"} low-confidence line(s), ${prior.last?.anomalies ?? "?"} problem(s); ${prior.rulesLearned} supplier rule(s) learned so far.`);
 
   // 1 — TeamSystem compiles the periodic VAT/LIPE/F24 batch from the ledger,
   // and hands over the client's master data + chart of accounts (the
@@ -58,6 +78,8 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
   const priorPeriod = await teamSystem.readPriorPeriod(clientId);
   const chartOfAccounts = await teamSystem.readChartOfAccounts(clientId);
   const period = vatBatch.period;
+  run.period = period;
+  run.record("batch_fetched", { client: master.name, lines: vatBatch.lines.length, kind: vatBatch.kind });
   feed("teamsystem", `TeamSystem compiled the ${vatBatch.kind} batch for ${master.name} (${period}) from the ledger.`);
   publish("board", { step: "batch", label: `${master.name} — batch ${period}: ${vatBatch.lines.length} lines` });
   await wait(600);
@@ -65,6 +87,8 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
   // 2 — L'Addetto IVA validates completeness, coherence, prior periods & VAT rules.
   let received = [];
   let { tail, anomalies } = validateBatch(vatBatch, { receivedDocs: received, priorPeriod, taxonomy: chartOfAccounts, vatGroup: master.vatGroup, formatAnomalies: vatBatch.formatAnomalies });
+  const initialTail = tail.length, initialAnomalies = anomalies.length;
+  run.record("validated", { tail: initialTail, anomalies: initialAnomalies, rules: anomalies.map((a) => a.ruleId) });
   feed("l_addetto_iva", `Validated vs prior periods: ${tail.length} low-confidence line(s), ${anomalies.length} anomaly(ies).`,
        tail.length || anomalies.length ? "warn" : "good");
   publish("board", {
@@ -78,6 +102,7 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
   // 3 — Solve the low-confidence tail (pre-fill): Il Classificatore.
   for (const line of tail) {
     const r = await classifyLine(line, vatBatch.client, chartOfAccounts);
+    run.record("classified", { line: line.id, supplier: line.supplier, account: r.account, confidence: r.confidence, source: r.source, needsHuman: r.needsHuman });
     publish("coa", { supplier: line.supplier, account: r.account, confidence: r.confidence, source: r.source, needsHuman: r.needsHuman, options: chartOfAccounts });
     // r.source is otherwise invisible in the UI — memory (a rule already
     // learned for this client+supplier), slm (a real modelGateway.mjs call —
@@ -87,6 +112,7 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
     // way to tell which one actually ran.
     const sourceLabel = { memory: "remembered rule", slm: "model call", heuristic: "keyword fallback" }[r.source] || r.source;
     feed("il_classificatore", `Tail line ${line.id} (${line.supplier}) -> account ${r.account} @ conf ${r.confidence} (via ${sourceLabel}).`);
+    if (!r.needsHuman) { line.account = r.account; line.confidence = r.confidence; }
     await wait(500);
 
 // 5 (memory) — low confidence -> a REAL gate: the run pauses here until a
@@ -104,6 +130,7 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
 
       const outcome = await gate.decision.then((d) => ({ approved: true, ...d })).catch((e) => ({ approved: false, error: e.message }));
       publish("gate", { id: gate.id, clientId: vatBatch.client, status: outcome.approved ? "approved" : "denied" });
+      run.record("gate_decision", { line: line.id, supplier: line.supplier, approved: outcome.approved, account: outcome.account || null, approvedBy: outcome.approvedBy || null });
 
       if (!outcome.approved) {
         feed("l_archivista", `Classification for ${line.supplier} was declined — stays unclassified in the tail.`, "warn");
@@ -116,6 +143,11 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
         value: outcome.account, confirmedBy: outcome.approvedBy || "unknown", evidenceId: ev.id,
       });
       publish("knowledge", { record: rule, note: "Rule confirmed at the gate and stored — auto-applied next period." });
+      run.record("rule_learned", { supplier: line.supplier, account: outcome.account, confirmedBy: outcome.approvedBy || "unknown", evidenceId: ev.id });
+      // The line is resolved now — without this the re-check below still
+      // counted it as an open low-confidence line.
+      line.account = outcome.account;
+      line.confidence = 0.98;
       feed("l_archivista", `Rule saved to Cortex: ${line.supplier} -> ${outcome.account} (conf 0.98), confirmed by ${outcome.approvedBy || "unknown"}. Tail shrinks next period.`, "good");
       await wait(400);
     }
@@ -126,8 +158,10 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
   // correction request instead (Rulebook Section 9.2) — the record is held
   // either way until it clears.
   for (const an of anomalies) {
+    const seenBefore = prior.recurring[an.ruleId] || 0;
+    run.record("anomaly_flagged", { ruleId: an.ruleId, kind: an.kind, message: describeAnomaly(an), seenInEarlierRuns: seenBefore });
     if (an.kind !== "item_missing") {
-      feed("l_addetto_iva", `Anomaly (${an.ruleId}): ${an.message}`, "warn");
+      feed("l_addetto_iva", `Anomaly (${an.ruleId}): ${an.message}${seenBefore ? ` — recurring: ${an.ruleId} was also flagged in ${seenBefore} earlier run(s) for this client.` : ""}`, "warn");
       publish("board", { step: "flagged", label: `Problem found — ${describeAnomaly(an)}` });
       const ev = evidence.put({ kind: "anomaly", ruleId: an.ruleId, detail: an, period });
       publish("evidence", { record: ev });
@@ -150,6 +184,7 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
       throw new Error(`Runtime could not handle the studio instruction: ${instructionOutcome.run?.error?.code || instructionOutcome.status}`);
     }
     const result = instructionOutcome.result;
+    run.record("missing_document_handled", { expected: an.expected, period: an.period, askedOwner: !!result.askedOwner, found: !!result.found });
 
     if (result.askedOwner) {
       feed("l_amministrativo", `Missing invoice not on file — asked the owner on WhatsApp (request ${result.requestId}).`);
@@ -180,6 +215,7 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
   // 5 — Re-assemble + prove; re-validate to show it now passes clean.
   const recheck = validateBatch(vatBatch, { receivedDocs: received, priorPeriod, taxonomy: chartOfAccounts, vatGroup: master.vatGroup, formatAnomalies: vatBatch.formatAnomalies });
   const stillOpen = recheck.tail.length + recheck.anomalies.length;
+  run.record("rechecked", { tail: recheck.tail.length, anomalies: recheck.anomalies.length, stillOpen });
   publish("board", {
     step: "reassembled",
     label: stillOpen === 0
@@ -199,6 +235,7 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
     throw new Error(`Runtime could not prepare the AdE submission: ${preparationRun.error?.code || preparationRun.status}`);
   }
   const prepared = preparationRun.artifacts[0];
+  run.record("submission_prepared", { protocolDraft: prepared.protocolDraft });
   feed("l_addetto_iva", `Batch re-assembled and pre-validated (${prepared.protocolDraft}). Ready for signature.`, "good");
   await wait(600);
 
@@ -218,15 +255,33 @@ export async function runVatFilingPath(clientId = "rossi_srl") {
   const summary = stillOpen === 0
     ? `Batch validated and clean for ${period} — ready for the professional's signature.`
     : `Batch prepared for ${period} with ${stillOpen} item${stillOpen === 1 ? "" : "s"} still open — professional review needed before signing.`;
+  // The status decides what TeamSystem does next: a clean batch goes to the
+  // professional for signature; open items become tasks + client requests.
+  const wbStatus = stillOpen === 0 ? "awaiting_signature" : "needs_review";
+  const openItems = [
+    ...recheck.anomalies.map((a) => ({ type: "anomaly", kind: a.kind, ruleId: a.ruleId, supplier: a.supplier || null, message: describeAnomaly(a), recurringCount: prior.recurring[a.ruleId] || 0 })),
+    ...recheck.tail.map((l) => ({ type: "tail", kind: "low_confidence", supplier: l.supplier, message: `Line ${l.id} (${l.supplier}) still needs a confirmed category` })),
+  ];
   const wb = await teamSystem.writeBack(vatBatch.client, period, {
-    status: "awaiting_signature", summary, deadline, tailCount: recheck.tail.length, anomalyCount: recheck.anomalies.length,
+    status: wbStatus, summary, deadline, tailCount: recheck.tail.length, anomalyCount: recheck.anomalies.length, openItems,
   });
+  run.record("written_back", { status: wbStatus, delivered: wb.deliveredToFirm, stage: wb.workflow?.stage || null, nextSteps: wb.workflow?.nextSteps || [] });
+  for (const step of wb.workflow?.nextSteps || []) feed("teamsystem", `TeamSystem next step: ${step}`, "info");
   publish("board", { step: "writeback", label: wb.deliveredToFirm ? `Sent back to TeamSystem — deadline ${deadline}` : "Couldn't reach TeamSystem — filing update saved locally only" });
   feed("teamsystem",
     wb.deliveredToFirm
       ? `Sent back to TeamSystem: ${summary} Deadline: ${deadline}.`
       : `TeamSystem wasn't reachable — this filing update did NOT reach it, saved locally only.`,
     wb.deliveredToFirm ? "good" : "warn");
+
+  const { profile } = clientMemory.finishRun(run, {
+    tail: initialTail, anomalies: initialAnomalies, openAfter: stillOpen, status: wbStatus, delivered: wb.deliveredToFirm,
+    anomalyRules: anomalies.map((a) => a.ruleId),
+  });
+  const before = prior.last;
+  feed("l_archivista", before
+    ? `Cortex memory updated (run #${profile.runs}): low-confidence lines ${before.tail} -> ${initialTail}, problems ${before.anomalies} -> ${initialAnomalies}.`
+    : `Cortex memory updated (run #${profile.runs}): this client's baseline is ${initialTail} low-confidence line(s) and ${initialAnomalies} problem(s).`, "good");
 
   publish("board", { step: "done", label: "Pre-filing validation complete" });
   return { ok: true };

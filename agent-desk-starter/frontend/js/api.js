@@ -79,7 +79,10 @@
   }
   async function postJSON(url, body) {
     const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
-    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    if (!r.ok) {
+      let msg = null; try { msg = (await r.json()).error; } catch { /* not JSON */ }
+      throw new Error(msg || `${url} -> ${r.status}`);
+    }
     return r.json();
   }
   async function patchJSON(url, body) {
@@ -96,6 +99,12 @@
   const runDemo               = (clientId) => getJSON(`/api/run-demo${clientId ? `?client=${encodeURIComponent(clientId)}` : ""}`);
   const getTsClients          = () => getJSON("/api/ts-clients");
   const getGatewayStatus       = () => getJSON("/api/gateway-status");
+  const getClientMemory        = (clientId) => getJSON(`/api/client-memory/${encodeURIComponent(clientId)}`);
+  const getTsWorkflow          = (clientId) => getJSON(`/api/ts-workflow/${encodeURIComponent(clientId)}`);
+  const getEmailStatus         = () => getJSON("/api/email/status");
+  const getEmailMessages       = (clientId) => getJSON(`/api/email/messages?client=${encodeURIComponent(clientId)}`);
+  const sendClientEmail        = (clientId, subject, body) => postJSON("/api/email/send", { clientId, subject, body });
+  const contactDocumentRequest = (id, payload) => postJSON(`/api/document-requests/${encodeURIComponent(id)}/contact`, payload);
   const getGates               = () => getJSON("/api/gates");
   const approveGate            = (id, approvedBy, approverRole) => postJSON(`/api/gate/${id}/approve`, { approvedBy, approverRole });
   const denyGate                = (id, reason) => postJSON(`/api/gate/${id}/deny`, { reason });
@@ -192,7 +201,7 @@
 
   window.AgentDeskAPI = {
     SEATS, SEAT_BY_ID, AGENT_COLOR, A2A_TYPE_META, SKILL_TEST_CONFIG,
-    useBus, usePendingCount, useNowTick, runDemo, getTsClients, getGatewayStatus, getGates, approveGate, denyGate,
+    useBus, usePendingCount, useNowTick, runDemo, getTsClients, getGatewayStatus, getClientMemory, getTsWorkflow, getEmailStatus, getEmailMessages, sendClientEmail, contactDocumentRequest, getGates, approveGate, denyGate,
     getDocumentRequests, resolveDocumentRequest, getQuestions, resolveQuestion,
     compileSeat, deliverPack, getRuntimeStatus, testSkill,
     getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry,

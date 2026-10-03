@@ -12,7 +12,7 @@
     agent:     { title: "Agent page",   description: "Compile a seat from its job description and inspect what it produces." },
     stream:    { title: "A2A stream",   description: "Typed, signed messages moving between agents" },
     board:     { title: "Board",        description: "The pre-filing validation flow, step by step, as it runs." },
-    memory:    { title: "Memory panel", description: "What's been proven (evidence) and what's believed (knowledge), live." },
+    memory:    { title: "Memory panel", description: "Cortex memory per client (every action taken, what was learned), plus what's been proven (evidence) and what's believed (knowledge), live." },
     approvals: { title: "Approvals",    description: "Everything waiting on a human \u2014 owner sign-off and missing documents." },
   };
 
@@ -45,7 +45,7 @@
     else if (view === "agent") content = h(AgentPage, { initialSeat: selectedSeat, onSeatChange: setSelectedSeat });
     else if (view === "stream") content = h(A2AStream, { messages: ev.a2a });
     else if (view === "board") content = h(Board, { board: ev.board, feed: ev.feed });
-    else if (view === "memory") content = h(Memory, { evidence: ev.evidence, knowledge: ev.knowledge, coa: ev.coa, routing: ev.routing });
+    else if (view === "memory") content = h(Memory, { evidence: ev.evidence, knowledge: ev.knowledge, coa: ev.coa, routing: ev.routing, lastRunClientId });
     else if (view === "approvals") content = h(Approvals, { ladderEvents: ev.ladder });
 
     return h("div", { className: "app-shell" },

@@ -47,9 +47,10 @@
     }, []);
     if (!status) return null;
     const style = GATEWAY_TIER_STYLE[status.tier] || GATEWAY_TIER_STYLE.offline;
-    return h("span", { className: "gateway-status", title: "Which model-gateway tier askModel() is currently using" },
+    return h("span", { className: "gateway-status", title: status.note || "Which model-gateway tier askModel() is currently using" },
       h("span", { className: "live-dot live", style: { background: style.dot, width: 7, height: 7 } }),
-      h("span", { style: { color: style.fg } }, status.label));
+      h("span", { style: { color: style.fg } }, status.label),
+      status.note && h("span", { style: { color: "#9A5B12", marginLeft: 8, fontSize: 12 } }, status.note));
   }
 
   function ViewHeader({ title, description, live }) {
@@ -380,9 +381,10 @@
       count === 0 ? h(EmptyState, null, "Nothing here yet.") : h("div", { className: "mem-body" }, children));
   }
 
-  function Memory({ evidence, knowledge, coa, routing }) {
+  function Memory({ evidence, knowledge, coa, routing, lastRunClientId }) {
+    const cortex = h(ClientCortex, { lastRunClientId });
     if (evidence.length === 0 && knowledge.length === 0 && coa.length === 0 && routing.length === 0) {
-      return h(EmptyState, null, "Nothing recorded yet \u2014 run the demo to populate the evidence and knowledge stores.");
+      return h("div", null, cortex, h(EmptyState, null, "Nothing recorded yet \u2014 run the demo to populate the evidence and knowledge stores."));
     }
 
     const packs = evidence.filter((e) => e.record.kind === "monthly_pack");
@@ -473,7 +475,101 @@
         desc: "Every typed message addressed to Lo Smistatore and who it decided owns it, by competence + client ownership + availability \u2014 real decisions, not narrated. \"Every routing is human-overridable\" per its job description; there's no override control built yet, this section only makes the decisions visible.",
       }, routing.map(routingRow)));
 
-    return h("div", { className: "memory-grid" }, leftPanel, rightPanel);
+    return h("div", null, cortex, h("div", { className: "memory-grid" }, leftPanel, rightPanel));
+  }
+
+  // One pending document request, with a real way to chase it: choose email or
+  // WhatsApp, type the recipient and message fields, send. Every send is
+  // recorded on the request and in the evidence store.
+  function DocRequestCard({ r, ladderDots, onReceived, onChanged }) {
+    const { contactDocumentRequest } = API();
+    const doc = `${r.expected.docType} ${r.expected.supplier}`;
+    const [open, setOpen] = useState(false);
+    const [channel, setChannel] = useState("email");
+    const [msg, setMsg] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [save, setSave] = useState(false);
+    const [em, setEm] = useState({
+      to: (r.contact && r.contact.email) || "",
+      subject: `Document needed: ${doc} (${r.expected.period})`,
+      body: `Dear ${(r.contact && r.contact.name) || "client"},\n\nto complete your VAT filing for ${r.expected.period} we still need: ${doc}.\nPlease reply to this email with the document attached (PDF, XML or CSV) as soon as you can.\n\nKind regards,\nStudio`,
+    });
+    const [wa, setWa] = useState({ to: (r.contact && r.contact.phone) || "", template: "request_document", doc, period: r.expected.period });
+
+    const send = async () => {
+      setBusy(true); setMsg(null);
+      const payload = channel === "email"
+        ? { channel, to: em.to, subject: em.subject, body: em.body, saveToClient: save }
+        : { channel, to: wa.to, template: wa.template, vars: { doc: wa.doc, period: wa.period }, saveToClient: save };
+      try {
+        const out = await contactDocumentRequest(r.id, payload);
+        setMsg({ ok: true, text: `${out.contact.live ? "Sent" : "Recorded (offline stub — nothing actually sent; configure " + (channel === "email" ? "SMTP_*" : "WHATSAPP_*") + " to go live)"} to ${out.contact.to}.${out.savedToClient === true ? " Saved on the client's TeamSystem record." : ""}` });
+        onChanged();
+      } catch (e) { setMsg({ ok: false, text: String((e && e.message) || e) }); }
+      finally { setBusy(false); }
+    };
+    const field = (label, input) => h("label", { className: "field-label-inline", style: { display: "block", marginTop: 8 } }, label, input);
+
+    return h("div", { className: `approval-card${r.escalated ? " escalated" : ""}` },
+      h("div", { className: "approval-top" },
+        h("b", null, `${r.expected.docType} · ${r.expected.supplier}`),
+        h("span", { className: "payload-line" }, r.expected.period),
+        ladderDots(r.remindersSent, r.escalated),
+        r.escalated && h("span", { className: "pill-escalated" }, "escalated to Lo Smistatore")),
+      r.contacts && r.contacts.length > 0 && h("div", { className: "payload-line" },
+        "Contacted: " + r.contacts.map((c) => `${c.channel} → ${c.to} (${c.live ? "sent" : "stub"}, ${new Date(c.at).toLocaleTimeString()})`).join(" · ")),
+      h("div", { className: "approval-actions" },
+        h("button", { className: "btn-primary", onClick: () => setOpen(!open) }, open ? "Close" : "Contact the client"),
+        h("button", { className: "btn-received", onClick: () => onReceived(r.id) }, "Mark received")),
+      open && h("div", { className: "panel", style: { marginTop: 10 } },
+        h("div", { className: "pack-tester-row" },
+          ["email", "whatsapp"].map((c) => h("label", { key: c, className: "checkbox-label" },
+            h("input", { type: "radio", name: `ch-${r.id}`, checked: channel === c, onChange: () => { setChannel(c); setMsg(null); } }),
+            c === "email" ? "Email" : "WhatsApp"))),
+        channel === "email" ? h("div", null,
+          field("To", h("input", { className: "text-input", style: { width: "100%" }, value: em.to, placeholder: "client@example.it", onChange: (e) => setEm({ ...em, to: e.target.value }) })),
+          field("Subject", h("input", { className: "text-input", style: { width: "100%" }, value: em.subject, maxLength: 200, onChange: (e) => setEm({ ...em, subject: e.target.value }) })),
+          field("Message", h("textarea", { className: "text-input", style: { width: "100%", minHeight: 130 }, value: em.body, onChange: (e) => setEm({ ...em, body: e.target.value }) })))
+        : h("div", null,
+          h("p", { className: "hint" }, "WhatsApp business messages go out as a pre-approved template; the fields below fill its placeholders."),
+          field("Phone (international format)", h("input", { className: "text-input", style: { width: "100%" }, value: wa.to, placeholder: "+393331234567", onChange: (e) => setWa({ ...wa, to: e.target.value }) })),
+          field("Template name", h("input", { className: "text-input", style: { width: "100%" }, value: wa.template, onChange: (e) => setWa({ ...wa, template: e.target.value }) })),
+          field("Document", h("input", { className: "text-input", style: { width: "100%" }, value: wa.doc, onChange: (e) => setWa({ ...wa, doc: e.target.value }) })),
+          field("Period", h("input", { className: "text-input", style: { width: "100%" }, value: wa.period, onChange: (e) => setWa({ ...wa, period: e.target.value }) }))),
+        h("label", { className: "checkbox-label", style: { marginTop: 8 } },
+          h("input", { type: "checkbox", checked: save, onChange: (e) => setSave(e.target.checked) }),
+          `Also save this ${channel === "email" ? "address" : "number"} on the client's TeamSystem record`),
+        h("div", { className: "pack-tester-row" },
+          h("button", { className: "btn-primary", disabled: busy || !(channel === "email" ? em.to && em.subject && em.body : wa.to && wa.template), onClick: send }, busy ? "Sending…" : `Send ${channel === "email" ? "email" : "WhatsApp"}`)),
+        msg && h("div", { className: msg.ok ? "hint" : "error-banner" }, msg.text)));
+  }
+
+  // Cortex memory for one client: every action the desk took validating it,
+  // the trend across runs, recurring problems and the supplier rules learned.
+  function ClientCortex({ lastRunClientId }) {
+    const { getClientMemory } = API();
+    const [clients, setClients] = useState([]);
+    const [clientId, setClientId] = useState(lastRunClientId || (readRecents()[0] || ""));
+    const [memory, setMemory] = useState(null);
+    useEffect(() => { fetch("/api/ts-clients").then((r) => r.json()).then(setClients).catch(() => {}); }, []);
+    useEffect(() => { if (lastRunClientId) setClientId(lastRunClientId); }, [lastRunClientId]);
+    useEffect(() => {
+      if (!clientId) { setMemory(null); return; }
+      let cancelled = false;
+      const load = () => getClientMemory(clientId).then((m) => { if (!cancelled) setMemory(m); }).catch(() => {});
+      setMemory(null); load();
+      const id = setInterval(load, 5000);
+      return () => { cancelled = true; clearInterval(id); };
+    }, [clientId]);
+    return h("div", { style: { marginBottom: 16 } },
+      h("div", { className: "panel stacked-panel" },
+        h("div", { className: "pack-tester-row" },
+          h("label", { className: "field-label-inline" }, "Client",
+            h("select", { className: "text-input", value: clientId, onChange: (e) => setClientId(e.target.value) },
+              h("option", { value: "" }, "— choose a client —"),
+              clients.map((c) => h("option", { key: c.id, value: c.id }, c.name))))),
+        !clientId && h("p", { className: "hint" }, "Pick a client to see what the desk has done and learned for it.")),
+      clientId && h(ClientMemoryPanel, { memory }));
   }
 
   // ------------------------------------------------------------ approvals --
@@ -523,14 +619,7 @@
       h("h3", { className: "section-title" }, "Document requests"),
       docReqs.length === 0
         ? h(EmptyState, null, "No pending document requests right now.")
-        : docReqs.map((r) => h("div", { className: `approval-card${r.escalated ? " escalated" : ""}`, key: r.id },
-            h("div", { className: "approval-top" },
-              h("b", null, `${r.expected.docType} \u00b7 ${r.expected.supplier}`),
-              h("span", { className: "payload-line" }, r.expected.period),
-              ladderDots(r.remindersSent, r.escalated),
-              r.escalated && h("span", { className: "pill-escalated" }, "escalated to Lo Smistatore")),
-            h("div", { className: "approval-actions" },
-              h("button", { className: "btn-received", onClick: () => onReceived(r.id) }, "Mark received")))),
+        : docReqs.map((r) => h(DocRequestCard, { key: r.id, r, ladderDots, onReceived, onChanged: refresh })),
 
       h("h3", { className: "section-title" }, "Open questions to the studio"),
       h("p", { className: "hint" }, "domande_allo_studio \u2014 questions this seat has sent that the studio hasn't answered yet. No ladder here; only gates and document requests get reminded/escalated."),
@@ -551,34 +640,207 @@
             h("span", { className: "text" }, e.gateId || e.requestId))))));
   }
 
-  // ---- Clients: real per-client data ingestion, not just a single "Run
-  // demo" button. Lists every client the TeamSystem Firm mock actually has
-  // (10 of them, each with real invoices/XML/VAT data), and validating one
-  // is a real fetch through the real pipeline, not a canned script. ----
+  // ---- Clients: search -> select -> load. Nothing is listed until you search
+  // (or choose "Browse all"); picking a client loads its card, its Cortex
+  // memory (what the desk has done and learned for it) and what TeamSystem
+  // did after the last write-back. Validating runs the real pipeline. ----
+  const RECENTS_KEY = "agentdesk.recentClients";
+  function readRecents() { try { return JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]"); } catch { return []; } }
+  function writeRecents(ids) { try { localStorage.setItem(RECENTS_KEY, JSON.stringify(ids)); } catch { /* storage unavailable */ } }
+
+  function matchesQuery(c, query) {
+    const hay = [c.name, c.id, c.piva, c.ateco, c.regime, c.period].join(" ").toLowerCase();
+    return query.toLowerCase().split(/\s+/).filter(Boolean).every((tok) => hay.includes(tok));
+  }
+
+  function ClientMemoryPanel({ memory }) {
+    if (!memory) return h(EmptyState, null, "Loading Cortex memory…");
+    const recurring = Object.entries(memory.recurring || {});
+    return h("div", { className: "panel stacked-panel" },
+      h("h3", { className: "panel-title" }, "Cortex memory — what the desk has done and learned for this client"),
+      memory.runs === 0
+        ? h("p", { className: "hint" }, "No validation has run for this client yet. After the first run, every action taken is stored here and the next run starts from it.")
+        : h("div", null,
+          h("p", { className: "hint" }, `${memory.runs} validation run(s) · ${memory.rules.length} supplier rule(s) learned${recurring.length ? ` · recurring problems: ${recurring.map(([r, n]) => `${r} (${n}x)`).join(", ")}` : ""}`),
+          h("div", { className: "field-label" }, "Progress per run (oldest to newest)"),
+          memory.trend.map((t, i) => h("div", { className: "feed-row", key: i },
+            h("span", { className: "agent-name" }, `Run ${memory.runs - memory.trend.length + i + 1}`),
+            h("span", { className: "text" }, `${t.period || "?"} · low-confidence lines ${t.tail ?? "?"} · problems ${t.anomalies ?? "?"} · open at the end ${t.openAfter ?? "?"} · ${t.status || "?"}`))),
+          memory.rules.length > 0 && h("div", null,
+            h("div", { className: "field-label" }, "Learned supplier -> account rules (applied automatically next time)"),
+            memory.rules.map((r) => h("div", { className: "feed-row", key: r.key },
+              h("span", { className: "agent-name" }, r.supplier),
+              h("span", { className: "text" }, `account ${r.account} · ${r.status} · conf ${r.confidence}${r.confirmedBy ? ` · confirmed by ${r.confirmedBy}` : ""}`)))),
+          memory.lastRunActions.length > 0 && h("div", null,
+            h("div", { className: "field-label" }, `Actions taken in the last run (${memory.lastRunActions.length})`),
+            memory.lastRunActions.map((a) => h("div", { className: "feed-row", key: a.id },
+              h("span", { className: "agent-name" }, a.action.replace(/_/g, " ")),
+              h("span", { className: "text" }, summariseAction(a)))))));
+  }
+
+  function summariseAction(a) {
+    const d = a.detail || {};
+    switch (a.action) {
+      case "batch_fetched": return `${d.lines} line(s) pulled from TeamSystem`;
+      case "validated": return `${d.tail} low-confidence line(s), ${d.anomalies} problem(s)${d.rules && d.rules.length ? ` (${d.rules.join(", ")})` : ""}`;
+      case "classified": return `${d.supplier} -> ${d.account} @ ${d.confidence} via ${d.source}${d.needsHuman ? " (needs a human)" : ""}`;
+      case "gate_decision": return `${d.supplier}: ${d.approved ? `approved ${d.account} by ${d.approvedBy}` : "declined"}`;
+      case "rule_learned": return `${d.supplier} -> ${d.account}, confirmed by ${d.confirmedBy}`;
+      case "anomaly_flagged": return `${d.ruleId}: ${d.message}${d.seenInEarlierRuns ? ` (recurring, ${d.seenInEarlierRuns} earlier run(s))` : ""}`;
+      case "missing_document_handled": return `${d.expected} — ${d.askedOwner ? "asked the owner" : d.found ? "found on the client's systems" : "no result"}`;
+      case "rechecked": return `${d.stillOpen} item(s) still open after the fixes`;
+      case "submission_prepared": return `draft ${d.protocolDraft} — human gate, nothing transmitted`;
+      case "written_back": return `status ${d.status}${d.delivered ? "" : " (TeamSystem unreachable)"}${d.stage ? ` -> TeamSystem stage ${d.stage}` : ""}`;
+      case "run_failed": return d.error;
+      default: return JSON.stringify(d);
+    }
+  }
+
+  function TsWorkflowPanel({ workflow }) {
+    if (!workflow) return null;
+    if (workflow.unavailable) return h("div", { className: "panel stacked-panel" }, h("p", { className: "hint" }, "TeamSystem workflow unavailable — is the TeamSystem Firm mock running?"));
+    if (!workflow.periods.length) return h("div", { className: "panel stacked-panel" },
+      h("h3", { className: "panel-title" }, "TeamSystem — next steps"),
+      h("p", { className: "hint" }, "Nothing yet. After a validation, TeamSystem opens tasks, sends client requests and schedules reminders based on the status written back."));
+    return h("div", { className: "panel stacked-panel" },
+      h("h3", { className: "panel-title" }, "TeamSystem — what happened after the write-back"),
+      workflow.periods.map((ps) => h("div", { key: ps.period },
+        h("p", { className: "hint" }, `${ps.period} · stage: ${ps.stage.replace(/_/g, " ")}${ps.deadline ? ` · deadline ${ps.deadline}` : ""}${ps.protocol ? ` · protocol ${ps.protocol}` : ""}`),
+        ps.tasks.map((t) => h("div", { className: "feed-row", key: t.id },
+          h("span", { className: "agent-name" }, t.status === "open" ? "open" : "done"),
+          h("span", { className: "text" }, `${t.title} (${t.assignee}${t.due ? `, due ${t.due}` : ""})`))),
+        ps.outbox.length > 0 && h("p", { className: "hint" }, `${ps.outbox.length} request(s) sent to the client`))));
+  }
+
+  // Studio <-> client email: send a message to the address TeamSystem has on
+  // file, and see everything received back (attachments are filed into the
+  // client's TeamSystem record automatically).
+  function EmailPanel({ client }) {
+    const { getEmailStatus, getEmailMessages, sendClientEmail } = API();
+    const [status, setStatus] = useState(null);
+    const [messages, setMessages] = useState(null);
+    const [subject, setSubject] = useState('');
+    const [body, setBody] = useState('');
+    const [sending, setSending] = useState(false);
+    const [error, setError] = useState(null);
+
+    const load = () => {
+      getEmailStatus().then(setStatus).catch(() => {});
+      getEmailMessages(client.id).then(setMessages).catch(() => {});
+    };
+    useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, [client.id]);
+
+    const send = async () => {
+      setError(null); setSending(true);
+      try { await sendClientEmail(client.id, subject.trim(), body.trim()); setSubject(''); setBody(''); load(); }
+      catch (e) { setError(String((e && e.message) || e)); }
+      finally { setSending(false); }
+    };
+
+    return h('div', { className: 'panel stacked-panel' },
+      h('h3', { className: 'panel-title' }, 'Email — ' + client.name),
+      h('p', { className: 'hint' },
+        'Address on file in TeamSystem: ' + (client.email || '(none)') + ' · ' +
+        (status ? (status.mode === 'live' ? 'live (' + (status.send.live ? 'sending via ' + status.send.host : 'send: offline stub') + '; ' + (status.receive.imapLive ? 'receiving via IMAP ' + status.receive.imapHost : 'receive: IMAP off') + ')' : 'offline stub — nothing leaves this machine; set SMTP_*/IMAP_* in .env to go live') : 'checking…')),
+      h('div', { className: 'pack-tester-row' },
+        h('input', { className: 'text-input', style: { flex: 1, minWidth: 220 }, value: subject, placeholder: 'Subject', maxLength: 200, onChange: (e) => setSubject(e.target.value) })),
+      h('textarea', { className: 'text-input', style: { width: '100%', minHeight: 80, marginTop: 8 }, value: body, placeholder: 'Message to the client…', onChange: (e) => setBody(e.target.value) }),
+      h('div', { className: 'pack-tester-row' },
+        h('button', { className: 'btn-primary', disabled: sending || !subject.trim() || !body.trim(), onClick: send }, sending ? 'Sending…' : 'Send email')),
+      error && h('div', { className: 'error-banner' }, error),
+      messages && messages.length === 0 && h('p', { className: 'hint' }, 'No emails with this client yet.'),
+      messages && messages.map((m) => h('div', { className: 'feed-row', key: m.id, style: { flexDirection: 'column', alignItems: 'flex-start' } },
+        h('div', { style: { fontWeight: 600 } }, (m.direction === 'out' ? '→ sent: ' : '← received: ') + m.subject),
+        h('div', { className: 'text' }, (m.direction === 'out' ? 'to ' + m.to : 'from ' + m.from) + ' · ' + m.status + ' · ' + new Date(m.at).toLocaleString()),
+        m.text && h('div', { className: 'text', style: { whiteSpace: 'pre-wrap' } }, m.text.slice(0, 400)),
+        m.attachments && m.attachments.length > 0 && h('div', { className: 'hint' }, m.attachments.map((a) => a.filename + (a.outcome ? ' -> ' + a.outcome : '')).join(' | ')))));
+  }
+
   function Clients({ onValidate, running, lastRunClientId }) {
+    const { getTsWorkflow } = API();
     const [clients, setClients] = useState(null);
     const [error, setError] = useState(null);
+    const [query, setQuery] = useState("");
+    const [browseAll, setBrowseAll] = useState(false);
+    const [selectedId, setSelectedId] = useState(null);
+    const [workflow, setWorkflow] = useState(null);
+    const [recents, setRecents] = useState(readRecents);
 
     useEffect(() => {
       fetch("/api/ts-clients").then((r) => r.json()).then(setClients)
         .catch((e) => setError(String(e)));
     }, []);
 
+    // Reload memory + TeamSystem state for the selected client: on select, when a
+    // run finishes, and on a slow timer so a write-back that lands later shows up.
+    useEffect(() => {
+      if (!selectedId) return;
+      let cancelled = false;
+      const load = () => {
+        getTsWorkflow(selectedId).then((w) => { if (!cancelled) setWorkflow(w); }).catch(() => {});
+      };
+      load();
+      const id = setInterval(load, 5000);
+      return () => { cancelled = true; clearInterval(id); };
+    }, [selectedId, running]);
+
     if (error) return h(EmptyState, null, `Couldn't reach the TeamSystem Firm mock: ${error}. Is it running (npm start in teamsystem-firm-mock)?`);
     if (!clients) return h(EmptyState, null, "Loading clients from the TeamSystem Firm mock…");
 
+    const select = (c) => {
+      setSelectedId(c.id); setQuery(""); setBrowseAll(false); setWorkflow(null);
+      const next = [c.id, ...recents.filter((r) => r !== c.id)].slice(0, 5);
+      setRecents(next); writeRecents(next);
+    };
+    const clear = () => { setSelectedId(null); setQuery(""); setBrowseAll(false); setWorkflow(null); };
+
+    const selected = clients.find((c) => c.id === selectedId) || null;
+    const searching = query.trim().length > 0;
+    const results = searching ? clients.filter((c) => matchesQuery(c, query)) : (browseAll ? clients : []);
+
+    const resultRow = (c) => h("div", { className: "feed-row", key: c.id, style: { alignItems: "center", cursor: "pointer" }, onClick: () => select(c) },
+      h("div", { style: { flex: 1 } },
+        h("div", { style: { fontWeight: 600 } }, c.name),
+        h("div", { className: "text" }, `${c.regime} · ATECO ${c.ateco} · P.IVA ${c.piva}`)),
+      h("button", { className: "run-demo-btn compact", onClick: (e) => { e.stopPropagation(); select(c); } }, "Open"));
+
     return h("div", null,
-      h("div", { className: "panel" },
-        clients.map((c) => h("div", { className: "feed-row", key: c.id, style: { alignItems: "center" } },
-          h("div", { style: { flex: 1 } },
-            h("div", { style: { fontWeight: 600 } }, c.name),
-            h("div", { className: "text" }, `${c.regime} · ATECO ${c.ateco} · P.IVA ${c.piva} · ${c.lineCount} line(s) · ${c.period}`)),
-          h("button", {
-            className: "run-demo-btn compact",
-            disabled: running,
-            onClick: () => onValidate(c.id),
-            title: `Validate ${c.name}`,
-          }, running && lastRunClientId === c.id ? "Running…" : "Validate")))));
+      h("div", { className: "panel stacked-panel" },
+        h("div", { className: "pack-tester-row" },
+          h("input", {
+            className: "text-input", style: { flex: 1, minWidth: 260 }, value: query, autoFocus: true,
+            placeholder: `Search ${clients.length} clients by name, P.IVA, ATECO, regime…`,
+            onChange: (e) => setQuery(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === "Escape") setQuery("");
+              if (e.key === "Enter" && results[0]) select(results[0]);
+            },
+          }),
+          (searching || selected || browseAll) && h("button", { className: "btn-secondary", onClick: clear }, selected && !searching ? "Change client" : "Clear")),
+        !searching && !browseAll && h("p", { className: "hint" },
+          selected ? "Search to switch to another client." : `${clients.length} clients in TeamSystem. Type to search, or `,
+          !selected && h("a", { href: "#", onClick: (e) => { e.preventDefault(); setBrowseAll(true); } }, "browse all")),
+        !searching && !browseAll && recents.length > 0 && h("div", { className: "pack-tester-row" },
+          h("span", { className: "hint" }, "Recent:"),
+          recents.map((id) => clients.find((c) => c.id === id)).filter(Boolean).map((c) =>
+            h("button", { key: c.id, className: "btn-secondary", onClick: () => select(c) }, c.name))),
+        (searching || browseAll) && (results.length === 0
+          ? h("p", { className: "hint" }, `No client matches “${query}”.`)
+          : h("div", null,
+            h("p", { className: "hint" }, `${results.length} client${results.length === 1 ? "" : "s"}${searching ? " match" : ""} — click one to load it`),
+            results.map(resultRow)))),
+
+      selected && h("div", null,
+        h("div", { className: "panel stacked-panel" },
+          h("div", { className: "feed-row", style: { alignItems: "center" } },
+            h("div", { style: { flex: 1 } },
+              h("div", { style: { fontWeight: 600, fontSize: 16 } }, selected.name),
+              h("div", { className: "text" }, `${selected.regime} · ATECO ${selected.ateco} · P.IVA ${selected.piva} · ${selected.lineCount} line(s) · ${selected.period}`)),
+            h("button", {
+              className: "run-demo-btn compact", disabled: running, onClick: () => onValidate(selected.id), title: `Validate ${selected.name}`,
+            }, running && lastRunClientId === selected.id ? "Running…" : "Validate"))),
+        h(EmailPanel, { client: selected }),
+        h(TsWorkflowPanel, { workflow })));
   }
 
   // -------------------------------------------------------------- team --

@@ -5,11 +5,16 @@ import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join, extname } from "node:path";
+import { dirname, join, extname, resolve, sep } from "node:path";
 import { subscribe, history, publish } from "./bus.mjs";
 import { makeMessage } from "../contracts/a2aSchema.mjs";
 import { compile, compileWithJobText } from "./compiler.mjs";
 import { getGatewayStatus } from "./modelGateway.mjs";
+import { createGuard, listenHost, readBodyLimited } from "./security.mjs";
+import { describeRequest, contactForRequest } from "./documentContact.mjs";
+import { handleEmailRoute, PUBLIC_EMAIL_PATHS } from "./emailRoutes.mjs";
+import { startInboundPoller } from "./connectors/email.mjs";
+import { getClientMemory } from "./memory/clientMemory.mjs";
 import { runVatFilingPath } from "./scenario/vatFilingPath.mjs";
 import * as teamSystem from "./connectors/teamSystem.mjs";
 import {
@@ -73,20 +78,7 @@ const pub = join(here, "..", "frontend");
 const PORT = process.env.PORT || 5173;
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
-function readBody(req) {
-  // Collect raw Buffer chunks and decode ONCE at the end, explicitly as
-  // UTF-8 — `data += chunk` coerces each Buffer independently and can also
-  // split a multi-byte UTF-8 character across chunks, corrupting non-ASCII
-  // text (found for real in the sibling TeamSystem Firm mock server: an em
-  // dash came out as mojibake until this was fixed there too). This matters
-  // here specifically because job descriptions are written in Italian.
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
-  });
-}
+const readBody = readBodyLimited; // hard size cap, see security.mjs
 
 async function publishA2AForRequest(res, message, { waitForOutcome = false } = {}) {
   try {
@@ -111,11 +103,27 @@ function operatorAuthorized(req) {
   return ok ? { ok: true } : { ok: false, status: 403, code: "OPERATOR_AUTH_FAILED" };
 }
 
-const server = createServer(async (req, res) => {
+// Every request passes the security guard first (CORS allowlist, CSRF check,
+// optional login, hardening headers) — see security.mjs.
+const { guard } = createGuard({
+  port: PORT,
+  publicPaths: [...PUBLIC_EMAIL_PATHS],
+  csp: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+});
+
+const server = createServer((req, res) => handleRequest(req, res).catch((e) => {
+  // One bad request (e.g. an oversized body) must not crash the process.
+  console.error(`[server] unhandled error on ${req.method} ${req.url}:`, e);
+  if (!res.headersSent) res.writeHead(e.status || (e instanceof SyntaxError ? 400 : 500), { "Content-Type": "application/json", ...(e.status === 413 ? { Connection: "close" } : {}) }).end(JSON.stringify({ error: e.status === 413 ? "request body too large" : e instanceof SyntaxError ? "malformed JSON" : "internal error" }));
+}));
+
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+  if (!(await guard(req, res, url))) return;
 
   if (url.pathname === "/events") {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    res.write(": connected\n\n"); // flush headers now so the browser reports Live even before the first event
     for (const e of history()) res.write(`data: ${JSON.stringify(e)}\n\n`);
     const off = subscribe((e) => res.write(`data: ${JSON.stringify(e)}\n\n`));
     req.on("close", off);
@@ -127,6 +135,23 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/api/ts-clients" && req.method === "GET") {
     const list = await teamSystem.listClients();
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
+    return;
+  }
+
+  if (await handleEmailRoute(req, res, url, readBody)) return;
+
+  // GET /api/client-memory/:clientId — Cortex memory for one client: run
+  // history/trend, recurring problems, learned supplier rules, last run's actions.
+  const memMatch = url.pathname.match(/^\/api\/client-memory\/([^/]+)$/);
+  if (memMatch && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(getClientMemory(decodeURIComponent(memMatch[1]))));
+    return;
+  }
+
+  // GET /api/ts-workflow/:clientId — what TeamSystem did after the write-backs.
+  const wfMatch = url.pathname.match(/^\/api\/ts-workflow\/([^/]+)$/);
+  if (wfMatch && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(await teamSystem.readWorkflow(decodeURIComponent(wfMatch[1]))));
     return;
   }
 
@@ -213,11 +238,11 @@ const server = createServer(async (req, res) => {
       if (req.method === "POST") {
         const body = await readBody(req);
         const { jobText } = body ? JSON.parse(body) : {};
-        const { manifest, skill, usedCustomJobText } = await compileWithJobText(seat, jobText);
-        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ manifest, skill, usedCustomJobText }));
+        const { manifest, skill, warnings, usedCustomJobText } = await compileWithJobText(seat, jobText);
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ manifest, skill, warnings, usedCustomJobText }));
       } else {
-        const { manifest, skill } = await compile(seat);
-        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ manifest, skill }));
+        const { manifest, skill, warnings } = await compile(seat);
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ manifest, skill, warnings }));
       }
     } catch (e) {
       res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
@@ -303,8 +328,14 @@ const server = createServer(async (req, res) => {
 
   // ---- document-request API (used by L'Amministrativo's collectDocument) ----
   if (url.pathname === "/api/document-requests" && req.method === "GET") {
-    const list = [...pendingDocumentRequests.values()].map((r) => ({ id: r.id, clientId: r.clientId, expected: r.expected, status: r.status, remindersSent: r.remindersSent, escalated: r.escalated }));
+    const list = await Promise.all([...pendingDocumentRequests.values()].map(describeRequest));
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
+    return;
+  }
+  const docContactMatch = url.pathname.match(/^\/api\/document-requests\/([^/]+)\/contact$/);
+  if (docContactMatch && req.method === "POST") {
+    const out = await contactForRequest(decodeURIComponent(docContactMatch[1]), JSON.parse((await readBody(req)) || "{}"));
+    res.writeHead(out.status, { "Content-Type": "application/json" }).end(JSON.stringify(out.body));
     return;
   }
   const docReqMatch = url.pathname.match(/^\/api\/document-requests\/([^/]+)\/resolve$/);
@@ -433,20 +464,33 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Front-end libraries are served from node_modules, not a public CDN: works offline and in locked-down networks.
+  const VENDOR = { "/vendor/react.production.min.js": "react/umd/react.production.min.js", "/vendor/react-dom.production.min.js": "react-dom/umd/react-dom.production.min.js" };
+  if (VENDOR[url.pathname] && req.method === "GET") {
+    try {
+      const body = await readFile(join(here, "..", "node_modules", VENDOR[url.pathname]));
+      res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "public, max-age=86400" }).end(body);
+    } catch { res.writeHead(404).end("Not found"); }
+    return;
+  }
+
   // static
   let p = url.pathname === "/" ? "/index.html" : url.pathname;
+  const filePath = resolve(pub, "." + decodeURIComponent(p));
+  if (!filePath.startsWith(resolve(pub) + sep)) { res.writeHead(404).end("Not found"); return; } // no path traversal out of frontend/
   try {
-    const body = await readFile(join(pub, p));
+    const body = await readFile(filePath);
     res.writeHead(200, { "Content-Type": MIME[extname(p)] || "application/octet-stream", "Cache-Control": "no-store" }).end(body);
   } catch { res.writeHead(404).end("Not found"); }
-});
+}
 
 // Fail startup if an enabled runtime seat advertises a business tool that has
 // no registered implementation, or if an operation declares a tool outside
 // its manifest. A2A endpoint/handoff entries are messaging capabilities.
 await defaultAgentEngine.validateConfiguration();
 await startDefaultA2AConsumers();
-server.listen(PORT, () => console.log(`Agent Desk starter on http://localhost:${PORT}`));
+startInboundPoller(); // no-op unless IMAP_* is configured
+server.listen(PORT, listenHost(), () => console.log(`Agent Desk starter on http://${listenHost()}:${PORT}`));
 
 let shuttingDown = false;
 async function shutdown() {

@@ -17,17 +17,18 @@
 import { vatBatch, priorPeriodBatch, period, client, chartOfAccounts } from "../seed.mjs";
 import * as fattureInCloud from "./fattureInCloud.mjs";
 import * as ingestion from "../ingestion.mjs";
+import { serviceAuthHeaders } from "../security.mjs";
 
-const TS_FIRM_URL = process.env.TS_FIRM_URL || "http://localhost:5680";
+const TS_FIRM_URL = process.env.TS_FIRM_URL || "http://127.0.0.1:5680";
 const DEFAULT_CLIENT_ID = client.id;
 const writeBackLog = []; // in-memory ledger of what's been written back this session
 
-async function tsFirm(path, { method = "GET", body } = {}) {
+async function tsFirm(path, { method = "GET", body, timeoutMs = 2000 } = {}) {
   const res = await fetch(`${TS_FIRM_URL}${path}`, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: { ...serviceAuthHeaders(), ...(body ? { "Content-Type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(2000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`TS Firm mock ${path} -> ${res.status}`);
   return res.json();
@@ -83,7 +84,7 @@ async function ingestAndNormalise(clientId, format) {
   const path = `/api/clients/${encodeURIComponent(clientId)}/source`;
   let raw;
   try {
-    const res = await fetch(`${TS_FIRM_URL}${path}`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${TS_FIRM_URL}${path}`, { headers: serviceAuthHeaders(), signal: AbortSignal.timeout(2000) });
     if (!res.ok) throw new Error(`${path} -> ${res.status}`);
     raw = await res.text();
   } catch (e) {
@@ -125,7 +126,7 @@ async function ingestAttachments(clientId) {
   try {
     const list = await tsFirm(`/api/clients/${encodeURIComponent(clientId)}/attachments`);
     for (const att of list) {
-      const res = await fetch(`${TS_FIRM_URL}/api/clients/${encodeURIComponent(clientId)}/attachments/${encodeURIComponent(att.docId)}`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${TS_FIRM_URL}/api/clients/${encodeURIComponent(clientId)}/attachments/${encodeURIComponent(att.docId)}`, { headers: serviceAuthHeaders(), signal: AbortSignal.timeout(2000) });
       if (!res.ok) continue;
       const bytes = Buffer.from(await res.arrayBuffer());
       ingestion.ingest({ source: "TeamSystem Firm mock", channel: "attachment-upload", clientId, raw: bytes, format: "pdf" });
@@ -197,6 +198,36 @@ export async function writeBack(clientId, periodId, details) {
     writeBackLog.push(rec);
     return { ok: true, ...rec, deliveredToFirm: false };
   }
+}
+
+/** Save a corrected contact detail (email / phone) back into the client's TeamSystem record. */
+export async function updateClientContact(clientId, changes) {
+  return tsFirm(`/api/clients/${encodeURIComponent(clientId)}`, { method: "PATCH", body: { changes, reason: "updated while contacting the client from Agent Desk", by: "agent_desk" } });
+}
+
+/** Which client owns this email address? null if none (or TeamSystem is unreachable). */
+export async function findClientByEmail(email) {
+  try { return await tsFirm(`/api/clients/by-email?email=${encodeURIComponent(email)}`); }
+  catch { return null; }
+}
+
+/** File a document received by email into the client's TeamSystem record,
+ *  through the same endpoints the studio's own uploads use: PDF -> attachment,
+ *  XML/CSV -> parsed into invoice line(s). Returns { summary }. */
+export async function deliverInboundDocument(clientId, { filename, ext, content }) {
+  const base = `/api/clients/${encodeURIComponent(clientId)}`;
+  if (ext === "pdf") {
+    const r = await tsFirm(`${base}/attachments`, { method: "POST", timeoutMs: 15000, body: { filename, contentBase64: Buffer.from(content).toString("base64"), kind: "supporting_document" } });
+    return { summary: r.line ? `stored as ${r.docId}, read as invoice line ${r.line.id} (${r.line.supplier})` : `stored as ${r.docId} (supporting evidence)` };
+  }
+  const r = await tsFirm(`${base}/documents`, { method: "POST", timeoutMs: 15000, body: { format: ext, content: Buffer.from(content).toString("utf8") } });
+  return { summary: ext === "csv" ? `added ${r.added.length} invoice line(s)` : `added invoice line ${r.line.id} (${r.line.supplier})` };
+}
+
+/** What TeamSystem did after the write-backs (tasks, client requests, stage). */
+export async function readWorkflow(clientId) {
+  try { return await tsFirm(`/api/clients/${encodeURIComponent(clientId)}/workflow`); }
+  catch { return { writeBacks: [], periods: [], unavailable: true }; }
 }
 
 /** For tests/inspection: everything written back this session. */

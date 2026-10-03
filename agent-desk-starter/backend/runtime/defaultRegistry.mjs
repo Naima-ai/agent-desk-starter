@@ -5,7 +5,7 @@ import { prepareSubmission } from "../connectors/adePortal.mjs";
 import { movements } from "../connectors/bankFeed.mock.mjs";
 import { draftInvoice } from "../connectors/fattureInCloudDraft.stub.mjs";
 import { readSdiInbox } from "../connectors/sdiInbox.stub.mjs";
-import { readPriorPeriod, readVatBatch } from "../connectors/teamSystem.mjs";
+import { readMasterData, readPriorPeriod, readVatBatch } from "../connectors/teamSystem.mjs";
 import { sendTemplate } from "../connectors/whatsapp.mjs";
 import { handleInstructionFromStudio } from "../lAmministrativo.mjs";
 import { getRoster } from "../rosterStore.mjs";
@@ -246,8 +246,9 @@ export const defaultAgentRegistry = new AgentRegistry()
             {
               movements: () => ctx.tools.invoke("bankfeed.read", { clientId: ctx.identity.clientId }),
               readInbox: () => ctx.tools.invoke("sdi.inbox", { clientId: ctx.identity.clientId }),
-              sendOwner: (template, vars) => ctx.tools.invoke("whatsapp.owner_employees", {
-                clientId: ctx.identity.clientId, to: "owner", template, vars,
+              // The owner's number on file in TeamSystem; the literal "owner" only if none is recorded yet.
+              sendOwner: async (template, vars) => ctx.tools.invoke("whatsapp.owner_employees", {
+                clientId: ctx.identity.clientId, to: (await readMasterData(ctx.identity.clientId)).phone || "owner", template, vars,
               }),
               toStudio: (message) => {
                 const { type, ...payload } = message;

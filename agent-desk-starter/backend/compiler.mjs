@@ -26,6 +26,27 @@ function loadSeedManifestSync(seatId) {
   return validateManifest(JSON.parse(raw));
 }
 
+/** A model-written manifest is NOT trusted to define what a seat can do. A 3B
+ *  model asked to "compile" a job description returns a generic VAT-batch
+ *  template (wrong tools, location, skills, memory, schedule, gate...) whatever
+ *  the seat; installed as the live manifest it either makes the runtime refuse
+ *  every run (RUNTIME_CONFIGURATION_INVALID) or silently switches off the
+ *  seat's skills. So the vetted seed manifest stays authoritative for every
+ *  capability field, and the compile can only make a seat STRICTER: refusals
+ *  the job text adds are kept (union). Every field the model tried to change
+ *  is reported in  so nothing is ignored silently. */
+export function reconcileWithSeed(seatId, manifest) {
+  const seed = loadSeedManifestSync(seatId);
+  const warnings = [];
+  const ignored = Object.keys(seed).filter((k) => k !== "refuses" && k !== "seat" && JSON.stringify(seed[k]) !== JSON.stringify(manifest[k]));
+  if (ignored.length) warnings.push(`Ignored the model's changes to: ${ignored.join(", ")} (the vetted seat definition is kept)`);
+  const droppedRefuses = seed.refuses.filter((x) => !manifest.refuses.includes(x));
+  if (droppedRefuses.length) warnings.push(`The model dropped hard refusals; restored: ${droppedRefuses.join(", ")}`);
+  const addedRefuses = manifest.refuses.filter((x) => !seed.refuses.includes(x));
+  if (addedRefuses.length) warnings.push(`Added refusals from the job text: ${addedRefuses.join(", ")}`);
+  return { manifest: validateManifest({ ...seed, refuses: [...seed.refuses, ...addedRefuses] }), warnings };
+}
+
 /** Synchronous on purpose — assertAllowed() is a hot, synchronous hard-block
  *  check (tests call it as `assert.throws(() => fn())`), and making the
  *  active-manifest lookup async would force that whole call chain async
@@ -117,26 +138,26 @@ export async function parseJobToManifest(seatId) {
 // STEP 2: validate against the contract (this is the guardrail gate).
 // STEP 3: emit an OpenClaw skill file (SOUL.md-style) with hard blocks.
 export async function compile(seatId) {
-  const manifest = await parseJobToManifest(seatId);
+  const { manifest, warnings } = reconcileWithSeed(seatId, await parseJobToManifest(seatId));
   const job = await readFile(join(seatsDir, `${seatId}.job.txt`), "utf8").catch(() => "");
   const skill = emitSkill(manifest, job);
   const outDir = join(here, "..", "build", "skills");
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, `${seatId}.md`), skill, "utf8");
   activeManifests.set(seatId, manifest); // this is now what the real pipeline reads for this seat
-  return { manifest, skill };
+  return { manifest, skill, warnings };
 }
 
 // Used by the frontend's "write the job in Italian" box.
 // Parses custom job text via SLM/LLM into a live manifest validated by ManifestSchema.
 export async function compileWithJobText(seatId, jobText) {
-  const manifest = await parseJobTextToManifest(jobText, seatId);
+  const { manifest, warnings } = reconcileWithSeed(seatId, await parseJobTextToManifest(jobText, seatId));
   const skill = emitSkill(manifest, jobText || "");
   const outDir = join(here, "..", "build", "skills");
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, `${seatId}.md`), skill, "utf8");
   activeManifests.set(seatId, manifest); // this is now what the real pipeline reads for this seat
-  return { manifest, skill, usedCustomJobText: Boolean(jobText) };
+  return { manifest, skill, warnings, usedCustomJobText: Boolean(jobText) };
 }
 
 export function emitSkill(m, job) {

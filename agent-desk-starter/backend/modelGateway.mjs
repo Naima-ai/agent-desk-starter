@@ -89,7 +89,8 @@ export async function askModel({
 }
 
 export async function getGatewayStatus() {
-  // Tier 1 — is the local Ollama/Qwen server actually reachable right now?
+  // Tier 1 — is the local Ollama/Qwen server reachable AND does it have the model?
+  let edgeNote = null;
   try {
     const probeUrl = LOCAL_SLM_URL.replace(/\/v1\/chat\/completions\/?$/, '/v1/models');
     const controller = new AbortController();
@@ -97,7 +98,16 @@ export async function getGatewayStatus() {
     try {
       const res = await fetch(probeUrl, { signal: controller.signal });
       if (res.ok) {
-        return { tier: 'edge', label: `Local SLM (${LOCAL_SLM_MODEL})`, model: LOCAL_SLM_MODEL };
+        // A reachable Ollama with no such model installed still fails every
+        // call with 404 "model not found" — only report the edge tier when
+        // the configured model is really there.
+        const body = await res.json().catch(() => ({}));
+        const installed = (body.data || []).map((m) => m.id);
+        const hasModel = installed.some((id) => id === LOCAL_SLM_MODEL || id === `${LOCAL_SLM_MODEL}:latest`);
+        if (hasModel) {
+          return { tier: 'edge', label: `Local SLM (${LOCAL_SLM_MODEL})`, model: LOCAL_SLM_MODEL };
+        }
+        edgeNote = `Ollama is running but model "${LOCAL_SLM_MODEL}" is not installed — run: ollama pull ${LOCAL_SLM_MODEL}`;
       }
     } finally {
       clearTimeout(timer);
@@ -108,12 +118,12 @@ export async function getGatewayStatus() {
 
   // Tier 2 — no live edge model, but a cloud fallback key is configured.
   if (FALLBACK_LLM_KEY) {
-    return { tier: 'cloud', label: 'Cloud Fallback (Gemini)', model: 'gemini-flash-latest' };
+    return { tier: 'cloud', label: 'Cloud Fallback (Gemini)', model: 'gemini-flash-latest', note: edgeNote };
   }
 
   // Tier 3 — neither is available; askModel() would serve the deterministic
   // offline heuristic for every call right now.
-  return { tier: 'offline', label: 'Offline Heuristic Fallback', model: null };
+  return { tier: 'offline', label: 'Offline Heuristic Fallback', model: null, note: edgeNote };
 }
 
 /**
