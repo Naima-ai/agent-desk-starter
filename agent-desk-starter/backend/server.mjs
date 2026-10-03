@@ -155,6 +155,15 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // GET /api/ts-clients/:id — one client's master data + chart of accounts,
+  // for the Clients tab's detail panel once a client is picked.
+  const tsClientMatch = url.pathname.match(/^\/api\/ts-clients\/([^/]+)$/);
+  if (tsClientMatch && req.method === "GET") {
+    const master = await teamSystem.readMasterData(decodeURIComponent(tsClientMatch[1]));
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(master));
+    return;
+  }
+
   // GET /api/gateway-status — which model-gateway tier askModel() would
   // currently land on (edge SLM / cloud fallback / offline heuristic).
   if (url.pathname === "/api/gateway-status" && req.method === "GET") {

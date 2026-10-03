@@ -6,7 +6,7 @@
   const { Sidebar, ViewHeader, Roster, AgentPage, A2AStream, Board, Memory, Approvals, Clients, Team } = window.AgentDeskComponents;
 
   const VIEW_META = {
-    clients:   { title: "Clients",      description: "Real client data from TeamSystem \u2014 pick one to pull its VAT batch through the real pipeline." },
+    clients:   { title: "Clients",      description: "Search TeamSystem's client book, pick a client, then validate its VAT batch through the real pipeline." },
     roster:    { title: "Roster",       description: "Every seat on the desk \u2014 who they are and where they run." },
     team:      { title: "Team",         description: "Lo Smistatore's real staff roster \u2014 who it actually routes messages to." },
     agent:     { title: "Agent page",   description: "Compile a seat from its job description and inspect what it produces." },
@@ -22,6 +22,7 @@
     const [running, setRunning] = useState(false);
     const [selectedSeat, setSelectedSeat] = useState(null);
     const [lastRunClientId, setLastRunClientId] = useState(null);
+    const [selectedClientId, setSelectedClientId] = useState(null); // survives tab switches
 
     // Refreshes whenever new gate/ladder activity arrives on the bus,
     // or every few seconds regardless
@@ -39,13 +40,13 @@
     const meta = VIEW_META[view];
 
     let content;
-    if (view === "clients") content = h(Clients, { onValidate: onValidateClient, running, lastRunClientId });
+    if (view === "clients") content = h(Clients, { onValidate: onValidateClient, running, lastRunClientId, selectedClientId, onSelectClient: setSelectedClientId });
     else if (view === "roster") content = h(Roster, { onSelectSeat: goToAgentPage });
     else if (view === "team") content = h(Team, null);
     else if (view === "agent") content = h(AgentPage, { initialSeat: selectedSeat, onSeatChange: setSelectedSeat });
     else if (view === "stream") content = h(A2AStream, { messages: ev.a2a });
     else if (view === "board") content = h(Board, { board: ev.board, feed: ev.feed });
-    else if (view === "memory") content = h(Memory, { evidence: ev.evidence, knowledge: ev.knowledge, coa: ev.coa, routing: ev.routing, lastRunClientId });
+    else if (view === "memory") content = h(Memory, { evidence: ev.evidence, knowledge: ev.knowledge, coa: ev.coa, routing: ev.routing, lastRunClientId, selectedClientId });
     else if (view === "approvals") content = h(Approvals, { ladderEvents: ev.ladder });
 
     return h("div", { className: "app-shell" },

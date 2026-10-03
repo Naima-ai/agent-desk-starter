@@ -98,6 +98,7 @@
 
   const runDemo               = (clientId) => getJSON(`/api/run-demo${clientId ? `?client=${encodeURIComponent(clientId)}` : ""}`);
   const getTsClients          = () => getJSON("/api/ts-clients");
+  const getTsClient           = (id) => getJSON(`/api/ts-clients/${encodeURIComponent(id)}`);
   const getGatewayStatus       = () => getJSON("/api/gateway-status");
   const getClientMemory        = (clientId) => getJSON(`/api/client-memory/${encodeURIComponent(clientId)}`);
   const getTsWorkflow          = (clientId) => getJSON(`/api/ts-workflow/${encodeURIComponent(clientId)}`);
@@ -201,7 +202,7 @@
 
   window.AgentDeskAPI = {
     SEATS, SEAT_BY_ID, AGENT_COLOR, A2A_TYPE_META, SKILL_TEST_CONFIG,
-    useBus, usePendingCount, useNowTick, runDemo, getTsClients, getGatewayStatus, getClientMemory, getTsWorkflow, getEmailStatus, getEmailMessages, sendClientEmail, contactDocumentRequest, getGates, approveGate, denyGate,
+    useBus, usePendingCount, useNowTick, runDemo, getTsClients, getTsClient, getGatewayStatus, getClientMemory, getTsWorkflow, getEmailStatus, getEmailMessages, sendClientEmail, contactDocumentRequest, getGates, approveGate, denyGate,
     getDocumentRequests, resolveDocumentRequest, getQuestions, resolveQuestion,
     compileSeat, deliverPack, getRuntimeStatus, testSkill,
     getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry,

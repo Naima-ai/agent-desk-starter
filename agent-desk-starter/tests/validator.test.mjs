@@ -222,11 +222,11 @@ test("SDI-00327 flags a VAT Group member's invoice using the Group CF instead of
   assert.equal(checkVatGroupIdentity({ id: "X3", counterpartyCfUsed: "GROUPCF" }, null), null); // not a Group member — not this rule's business
 });
 
-test("all 10 TeamSystem Firm mock clients validate exactly as designed", async () => {
+test("every TeamSystem Firm mock client validates exactly as designed", async () => {
   // tests/ -> agent-desk-starter (inner)/ -> agent-desk-starter (outer)/ -> teamsystem-firm-mock/
   const mockDataUrl = new URL("../../teamsystem-firm-mock/backend/data/clients.mjs", import.meta.url);
   const { clients } = await import(mockDataUrl);
-  const cleanExpected = new Set(["verdi_costruzioni", "ferrari_forfettario", "gallo_esente"]);
+  const cleanExpected = new Set(["verdi_costruzioni", "ferrari_forfettario", "gallo_esente", "azienda_generale"]);
 
   for (const c of clients) {
     const { anomalies, tail } = validateBatch(

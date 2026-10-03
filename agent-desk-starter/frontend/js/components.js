@@ -381,8 +381,8 @@
       count === 0 ? h(EmptyState, null, "Nothing here yet.") : h("div", { className: "mem-body" }, children));
   }
 
-  function Memory({ evidence, knowledge, coa, routing, lastRunClientId }) {
-    const cortex = h(ClientCortex, { lastRunClientId });
+  function Memory({ evidence, knowledge, coa, routing, lastRunClientId, selectedClientId }) {
+    const cortex = h(ClientCortex, { lastRunClientId, selectedClientId });
     if (evidence.length === 0 && knowledge.length === 0 && coa.length === 0 && routing.length === 0) {
       return h("div", null, cortex, h(EmptyState, null, "Nothing recorded yet \u2014 run the demo to populate the evidence and knowledge stores."));
     }
@@ -546,10 +546,10 @@
 
   // Cortex memory for one client: every action the desk took validating it,
   // the trend across runs, recurring problems and the supplier rules learned.
-  function ClientCortex({ lastRunClientId }) {
+  function ClientCortex({ lastRunClientId, selectedClientId }) {
     const { getClientMemory } = API();
     const [clients, setClients] = useState([]);
-    const [clientId, setClientId] = useState(lastRunClientId || (readRecents()[0] || ""));
+    const [clientId, setClientId] = useState(lastRunClientId || selectedClientId || (readRecents()[0] || ""));
     const [memory, setMemory] = useState(null);
     useEffect(() => { fetch("/api/ts-clients").then((r) => r.json()).then(setClients).catch(() => {}); }, []);
     useEffect(() => { if (lastRunClientId) setClientId(lastRunClientId); }, [lastRunClientId]);
@@ -640,18 +640,9 @@
             h("span", { className: "text" }, e.gateId || e.requestId))))));
   }
 
-  // ---- Clients: search -> select -> load. Nothing is listed until you search
-  // (or choose "Browse all"); picking a client loads its card, its Cortex
-  // memory (what the desk has done and learned for it) and what TeamSystem
-  // did after the last write-back. Validating runs the real pipeline. ----
   const RECENTS_KEY = "agentdesk.recentClients";
   function readRecents() { try { return JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]"); } catch { return []; } }
   function writeRecents(ids) { try { localStorage.setItem(RECENTS_KEY, JSON.stringify(ids)); } catch { /* storage unavailable */ } }
-
-  function matchesQuery(c, query) {
-    const hay = [c.name, c.id, c.piva, c.ateco, c.regime, c.period].join(" ").toLowerCase();
-    return query.toLowerCase().split(/\s+/).filter(Boolean).every((tok) => hay.includes(tok));
-  }
 
   function ClientMemoryPanel({ memory }) {
     if (!memory) return h(EmptyState, null, "Loading Cortex memory…");
@@ -756,91 +747,137 @@
         m.attachments && m.attachments.length > 0 && h('div', { className: 'hint' }, m.attachments.map((a) => a.filename + (a.outcome ? ' -> ' + a.outcome : '')).join(' | ')))));
   }
 
-  function Clients({ onValidate, running, lastRunClientId }) {
+  function rememberClient(id) {
+    const next = [id, ...readRecents().filter((r) => r !== id)].slice(0, 5);
+    writeRecents(next);
+  }
+
+  // What TeamSystem did after the last write-back for the selected client (tasks, client requests, stage).
+  function ClientWorkflow({ clientId, running }) {
     const { getTsWorkflow } = API();
+    const [workflow, setWorkflow] = useState(null);
+    useEffect(() => {
+      let cancelled = false;
+      const load = () => getTsWorkflow(clientId).then((w) => { if (!cancelled) setWorkflow(w); }).catch(() => {});
+      setWorkflow(null); load();
+      const id = setInterval(load, 5000);
+      return () => { cancelled = true; clearInterval(id); };
+    }, [clientId, running]);
+    return h(TsWorkflowPanel, { workflow });
+  }
+
+  // ---- Clients: search the TeamSystem Firm mock's client book, pick one,
+  // and only then load it. The tab doesn't dump every client on arrival —
+  // a real studio has hundreds, so you search (name, P.IVA, ATECO, regime),
+  // select a result, and get that client's master data + full chart of
+  // accounts, with Validate running its VAT batch through the real pipeline. ----
+  function matchesClient(c, q) {
+    if (!q) return true;
+    return [c.name, c.id, c.piva, c.ateco, c.regime].some((v) => String(v || "").toLowerCase().includes(q));
+  }
+
+  function rateLabel(a) {
+    if (a.natura) return `${a.rate}% · ${a.natura}`;
+    if (a.rate == null) return "\u2014";
+    return `${a.rate}%`;
+  }
+
+  function ClientDetail({ clientId, onValidate, running, lastRunClientId, onClose, extra }) {
+    const [client, setClient] = useState(null);
+    const [error, setError] = useState(null);
+    const [accountQuery, setAccountQuery] = useState("");
+
+    useEffect(() => {
+      let cancelled = false;
+      setClient(null); setError(null); setAccountQuery("");
+      API().getTsClient(clientId).then((c) => { if (!cancelled) setClient(c); })
+        .catch((e) => { if (!cancelled) setError(String(e)); });
+      return () => { cancelled = true; };
+    }, [clientId]);
+
+    if (error) return h("div", { className: "panel" }, h(EmptyState, null, `Couldn't load ${clientId}: ${error}`));
+    if (!client) return h("div", { className: "panel" }, h(EmptyState, null, "Loading client\u2026"));
+
+    const chart = client.chartOfAccounts || [];
+    const q = accountQuery.trim().toLowerCase();
+    const shown = q ? chart.filter((a) => `${a.code} ${a.name} ${a.type || ""}`.toLowerCase().includes(q)) : chart;
+    const isRunning = running && lastRunClientId === client.id;
+
+    const panel = h("div", { className: "panel client-detail" },
+      h("div", { className: "client-detail-head" },
+        h("div", { style: { flex: 1, minWidth: 0 } },
+          h("h2", { className: "client-detail-name" }, client.name),
+          h("div", { className: "text client-detail-meta" },
+            `${client.regime} \u00B7 ATECO ${client.ateco} \u00B7 P.IVA ${client.piva} \u00B7 ${client.period}`)),
+        h("div", { className: "client-detail-actions" },
+          h("button", { className: "btn-secondary", onClick: onClose }, "Change client"),
+          h("button", {
+            className: "btn-primary", disabled: running, onClick: () => onValidate(client.id), title: `Validate ${client.name}`,
+          }, isRunning ? "Running\u2026" : "Validate"))),
+      client.edgeCase && h("p", { className: "hint", style: { margin: "10px 0 0" } }, client.edgeCase),
+
+      h("div", { className: "client-coa-head" },
+        h("div", { className: "panel-title", style: { margin: 0 } },
+          "Chart of accounts ", h("span", { className: "panel-subtitle" }, q ? `${shown.length} of ${chart.length}` : `${chart.length} account${chart.length === 1 ? "" : "s"}`)),
+        chart.length > 8 && h("input", {
+          className: "text-input", type: "search", placeholder: "Filter accounts\u2026", value: accountQuery,
+          onChange: (e) => setAccountQuery(e.target.value), "aria-label": "Filter accounts",
+        })),
+      h("div", { className: "coa-table-wrap" },
+        h("table", { className: "coa-table" },
+          h("thead", null, h("tr", null, h("th", null, "Code"), h("th", null, "Account"), h("th", null, "VAT"))),
+          h("tbody", null,
+            shown.map((a) => h("tr", { key: a.code },
+              h("td", { className: "mono" }, a.code),
+              h("td", null, a.name, a.type && h("span", { className: "coa-type" }, a.type.replace(/_/g, " "))),
+              h("td", { className: "mono" }, rateLabel(a)))),
+            shown.length === 0 && h("tr", null, h("td", { colSpan: 3, className: "hint" }, "No accounts match."))))));
+    return h("div", null, panel, extra && extra(client));
+  }
+
+  function Clients({ onValidate, running, lastRunClientId, selectedClientId, onSelectClient }) {
     const [clients, setClients] = useState(null);
     const [error, setError] = useState(null);
     const [query, setQuery] = useState("");
-    const [browseAll, setBrowseAll] = useState(false);
-    const [selectedId, setSelectedId] = useState(null);
-    const [workflow, setWorkflow] = useState(null);
-    const [recents, setRecents] = useState(readRecents);
+    const [submitted, setSubmitted] = useState(null); // null = no search run yet
 
     useEffect(() => {
-      fetch("/api/ts-clients").then((r) => r.json()).then(setClients)
-        .catch((e) => setError(String(e)));
+      API().getTsClients().then(setClients).catch((e) => setError(String(e)));
     }, []);
 
-    // Reload memory + TeamSystem state for the selected client: on select, when a
-    // run finishes, and on a slow timer so a write-back that lands later shows up.
-    useEffect(() => {
-      if (!selectedId) return;
-      let cancelled = false;
-      const load = () => {
-        getTsWorkflow(selectedId).then((w) => { if (!cancelled) setWorkflow(w); }).catch(() => {});
-      };
-      load();
-      const id = setInterval(load, 5000);
-      return () => { cancelled = true; clearInterval(id); };
-    }, [selectedId, running]);
-
     if (error) return h(EmptyState, null, `Couldn't reach the TeamSystem Firm mock: ${error}. Is it running (npm start in teamsystem-firm-mock)?`);
-    if (!clients) return h(EmptyState, null, "Loading clients from the TeamSystem Firm mock…");
+    if (!clients) return h(EmptyState, null, "Loading clients from the TeamSystem Firm mock\u2026");
 
-    const select = (c) => {
-      setSelectedId(c.id); setQuery(""); setBrowseAll(false); setWorkflow(null);
-      const next = [c.id, ...recents.filter((r) => r !== c.id)].slice(0, 5);
-      setRecents(next); writeRecents(next);
-    };
-    const clear = () => { setSelectedId(null); setQuery(""); setBrowseAll(false); setWorkflow(null); };
+    if (selectedClientId) {
+      return h(ClientDetail, {
+        clientId: selectedClientId, onValidate, running, lastRunClientId, onClose: () => onSelectClient(null),
+        // my additions: email the client, and what TeamSystem did after the last write-back
+        extra: (client) => [h(EmailPanel, { key: "email", client }), h(ClientWorkflow, { key: "wf", clientId: client.id, running })],
+      });
+    }
 
-    const selected = clients.find((c) => c.id === selectedId) || null;
-    const searching = query.trim().length > 0;
-    const results = searching ? clients.filter((c) => matchesQuery(c, query)) : (browseAll ? clients : []);
-
-    const resultRow = (c) => h("div", { className: "feed-row", key: c.id, style: { alignItems: "center", cursor: "pointer" }, onClick: () => select(c) },
-      h("div", { style: { flex: 1 } },
-        h("div", { style: { fontWeight: 600 } }, c.name),
-        h("div", { className: "text" }, `${c.regime} · ATECO ${c.ateco} · P.IVA ${c.piva}`)),
-      h("button", { className: "run-demo-btn compact", onClick: (e) => { e.stopPropagation(); select(c); } }, "Open"));
+    const results = submitted === null ? [] : clients.filter((c) => matchesClient(c, submitted));
+    const search = (e) => { e.preventDefault(); setSubmitted(query.trim().toLowerCase()); };
 
     return h("div", null,
-      h("div", { className: "panel stacked-panel" },
-        h("div", { className: "pack-tester-row" },
+      h("form", { className: "panel client-search", onSubmit: search, role: "search" },
+        h("label", { className: "field-label", htmlFor: "client-search-input" }, "Find a client"),
+        h("div", { className: "client-search-row" },
           h("input", {
-            className: "text-input", style: { flex: 1, minWidth: 260 }, value: query, autoFocus: true,
-            placeholder: `Search ${clients.length} clients by name, P.IVA, ATECO, regime…`,
-            onChange: (e) => setQuery(e.target.value),
-            onKeyDown: (e) => {
-              if (e.key === "Escape") setQuery("");
-              if (e.key === "Enter" && results[0]) select(results[0]);
-            },
+            id: "client-search-input", className: "text-input", type: "search", autoFocus: true,
+            placeholder: "Name, P.IVA, ATECO or regime", value: query, onChange: (e) => setQuery(e.target.value),
           }),
-          (searching || selected || browseAll) && h("button", { className: "btn-secondary", onClick: clear }, selected && !searching ? "Change client" : "Clear")),
-        !searching && !browseAll && h("p", { className: "hint" },
-          selected ? "Search to switch to another client." : `${clients.length} clients in TeamSystem. Type to search, or `,
-          !selected && h("a", { href: "#", onClick: (e) => { e.preventDefault(); setBrowseAll(true); } }, "browse all")),
-        !searching && !browseAll && recents.length > 0 && h("div", { className: "pack-tester-row" },
-          h("span", { className: "hint" }, "Recent:"),
-          recents.map((id) => clients.find((c) => c.id === id)).filter(Boolean).map((c) =>
-            h("button", { key: c.id, className: "btn-secondary", onClick: () => select(c) }, c.name))),
-        (searching || browseAll) && (results.length === 0
-          ? h("p", { className: "hint" }, `No client matches “${query}”.`)
-          : h("div", null,
-            h("p", { className: "hint" }, `${results.length} client${results.length === 1 ? "" : "s"}${searching ? " match" : ""} — click one to load it`),
-            results.map(resultRow)))),
+          h("button", { className: "btn-primary", type: "submit" }, "Search")),
+        h("p", { className: "hint", style: { marginBottom: 0 } },
+          `${clients.length} clients in the TeamSystem book. Search with an empty box to browse them all.`)),
 
-      selected && h("div", null,
-        h("div", { className: "panel stacked-panel" },
-          h("div", { className: "feed-row", style: { alignItems: "center" } },
-            h("div", { style: { flex: 1 } },
-              h("div", { style: { fontWeight: 600, fontSize: 16 } }, selected.name),
-              h("div", { className: "text" }, `${selected.regime} · ATECO ${selected.ateco} · P.IVA ${selected.piva} · ${selected.lineCount} line(s) · ${selected.period}`)),
-            h("button", {
-              className: "run-demo-btn compact", disabled: running, onClick: () => onValidate(selected.id), title: `Validate ${selected.name}`,
-            }, running && lastRunClientId === selected.id ? "Running…" : "Validate"))),
-        h(EmailPanel, { client: selected }),
-        h(TsWorkflowPanel, { workflow })));
+      submitted !== null && h("div", { className: "panel", style: { marginTop: 16 } },
+        h("div", { className: "panel-title" }, `${results.length} result${results.length === 1 ? "" : "s"}`),
+        results.length === 0
+          ? h("p", { className: "hint", style: { margin: 0 } }, "No client matches that search.")
+          : results.map((c) => h("button", { className: "client-result", key: c.id, onClick: () => { rememberClient(c.id); onSelectClient(c.id); } },
+              h("div", { style: { fontWeight: 600 } }, c.name),
+              h("div", { className: "text" }, `${c.regime} \u00B7 ATECO ${c.ateco} \u00B7 P.IVA ${c.piva} \u00B7 ${c.lineCount} line(s) \u00B7 ${c.period}`)))));
   }
 
   // -------------------------------------------------------------- team --
