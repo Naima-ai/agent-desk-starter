@@ -12,7 +12,15 @@ import { PDFParse } from "pdf-parse";
 import { clients } from "./data/clients.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const attachmentsDir = join(here, "attachments");
+const stateDir = process.env.TS_STATE_DIR || null; // set in Docker: one volume for every piece of runtime state
+const bundledAttachmentsDir = join(here, "attachments");
+const attachmentsDir = stateDir ? join(stateDir, "attachments") : bundledAttachmentsDir;
+
+/** Where a stored attachment really is: the state folder first, then the ones shipped with the code. */
+export function attachmentPath(filename) {
+  const p = join(attachmentsDir, filename);
+  return existsSync(p) ? p : join(bundledAttachmentsDir, filename);
+}
 
 // The 10 built-in demo clients live only in data/clients.mjs (in-memory,
 // reset to their curated edge-case state on every restart — deliberately,
@@ -22,7 +30,7 @@ const attachmentsDir = join(here, "attachments");
 // everything later added to them: accounts, documents, attachments) to a
 // small JSON file, the same pattern backend/memory/knowledgeStore.mjs
 // already uses for learned rules.
-const dataDir = join(here, "data");
+const dataDir = stateDir || join(here, "data");
 const customClientsFile = join(dataDir, "custom-clients.json");
 const customClientIds = new Set();
 
@@ -41,6 +49,9 @@ function persistCustomClients() {
   const saved = clients.filter((c) => customClientIds.has(c.id));
   writeFileSync(customClientsFile, JSON.stringify(saved, null, 2), "utf8");
 }
+
+/** Save a custom client after an edit (built-in clients are persisted by the edit log instead). */
+export function persistIfCustom(client) { if (customClientIds.has(client.id)) persistCustomClients(); }
 
 function pivaCheckDigit(nineDigits) {
   let total = 0;
@@ -68,7 +79,7 @@ function slugify(name) {
 }
 
 /** Create a new client. Returns { ok, client } or { ok: false, error }. */
-export function createClient({ name, piva, codiceFiscale, ateco, regime, period, priorPeriod, sourceFormat }) {
+export function createClient({ name, piva, codiceFiscale, ateco, regime, period, priorPeriod, sourceFormat, email, phone }) {
   if (!name) return { ok: false, error: "name is required" };
   const normalisedPiva = piva ? normalisePiva(piva) : null;
   if (piva && !isValidPiva(piva)) {
@@ -77,12 +88,14 @@ export function createClient({ name, piva, codiceFiscale, ateco, regime, period,
       : `must be 11 digits (optionally prefixed "IT"), got ${normalisedPiva.length} characters after stripping any "IT" prefix`;
     return { ok: false, error: `"${piva}" is not a valid Partita IVA (${reason})` };
   }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: `"${email}" is not a valid email address` };
+  if (phone && !/^\+[1-9]\d{7,14}$/.test(phone.trim())) return { ok: false, error: `"${phone}" is not a valid phone number (use international format, e.g. +393331234567)` };
   let id = slugify(name);
   if (!id) return { ok: false, error: "could not derive an id from that name" };
   if (clients.some((c) => c.id === id)) id = `${id}_${clients.length + 1}`;
 
   const client = {
-    id, name, regime: regime || "ordinaria", sourceFormat: sourceFormat || "json",
+    id, name, phone: phone ? phone.trim() : undefined, email: email ? email.trim().toLowerCase() : `amministrazione@${id.replace(/_/g, "-")}.example`, regime: regime || "ordinaria", sourceFormat: sourceFormat || "json",
     piva: normalisedPiva, codiceFiscale: codiceFiscale || normalisedPiva || null, ateco: ateco || null,
     edgeCase: "Added manually — not one of the 10 built-in demo cases.",
     chartOfAccounts: [], period: period || "2026-Q3", priorPeriod: priorPeriod || null,

@@ -44,6 +44,10 @@
   .uploadbtn.disabled{opacity:0.6;cursor:default}
   .uploadbtn input{display:none}
   .hint{font-size:11px;color:var(--muted);margin-top:6px}
+  .linkbtn{background:none;border:0;color:var(--blue);font-size:12px;font-weight:700;cursor:pointer;text-decoration:underline;padding:4px 6px}
+  td input,td select{width:100%;min-width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px}
+  .stage-needs_review{background:#FDEEDC;color:#9A5B12} .stage-awaiting_signature,.stage-signed{background:#E7F0FD;color:var(--blue)}
+  .stage-filed{background:#E4F6EE;color:#177355} .stage-ready_for_revalidation{background:#EAF0FB}
   @media (max-width: 700px) {
     main{grid-template-columns:1fr}
     .list{border-right:none;border-bottom:1px solid var(--border);max-height:280px}
@@ -53,9 +57,9 @@
 </head>
 <body>
 <div id="root"></div>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script crossorigin src="/vendor/react.production.min.js"></script>
+<script crossorigin src="/vendor/react-dom.production.min.js"></script>
+<script src="/vendor/babel.min.js"></script>
 <script type="text/babel">
 const { useState, useEffect } = React;
 
@@ -77,21 +81,88 @@ function App() {
   const refreshClients = () => fetch("/api/clients").then(r => r.json()).then(setClients);
   useEffect(() => { refreshClients(); }, []);
 
-  const refreshWriteBacks = (id) => fetch(`/api/clients/${id}/writeback`).then(r => r.json()).then(setWriteBacks);
+  const [workflow, setWorkflow] = useState({ periods: [] });
+  const [wfMsg, setWfMsg] = useState(null);
+  const refreshWriteBacks = (id) => {
+    fetch(`/api/clients/${id}/writeback`).then(r => r.json()).then(setWriteBacks);
+    fetch(`/api/clients/${id}/workflow`).then(r => r.json()).then(setWorkflow);
+  };
+  const wfAction = async (path, body) => {
+    setWfMsg(null);
+    const res = await fetch(`/api/clients/${selectedId}/workflow/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    const data = await res.json();
+    setWfMsg(data.ok ? (data.protocol ? `Filed — protocol ${data.protocol}` : data.started ? "Validation re-started in Agent Desk." : data.followUp ? `Task done. Next: ${data.followUp}` : "Done.") : `Error: ${data.error}`);
+    refreshWriteBacks(selectedId);
+  };
+  // ---- editing + emailing a client: how the studio actually resolves what validation found ----
+  const [masterForm, setMasterForm] = useState(null);   // non-null while editing client details
+  const [lineEditId, setLineEditId] = useState(null);
+  const [lineForm, setLineForm] = useState({});
+  const [editReason, setEditReason] = useState("");
+  const [editMsg, setEditMsg] = useState(null);
+  const [editLog, setEditLog] = useState([]);
+  const [mail, setMail] = useState({ email: null, messages: [], unavailable: false });
+  const [mailForm, setMailForm] = useState({ subject: "", body: "" });
+  const [mailMsg, setMailMsg] = useState(null);
+  const [mailSending, setMailSending] = useState(false);
+
+  const refreshMail = (id) => fetch(`/api/clients/${id}/email`).then(r => r.json()).then(setMail).catch(() => {});
+  const refreshEditLog = (id) => fetch(`/api/clients/${id}/edits`).then(r => r.json()).then(setEditLog).catch(() => {});
   const refreshDetail = (id) => {
     fetch(`/api/clients/${id}`).then(r => r.json()).then(setDetail);
     fetch(`/api/clients/${id}/batch`).then(r => r.json()).then(setBatch);
+    refreshEditLog(id); refreshMail(id);
+  };
+
+  const patch = async (path, changes) => {
+    setEditMsg(null);
+    const res = await fetch(`/api/clients/${selectedId}${path}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ changes, reason: editReason.trim() || undefined }) });
+    const data = await res.json();
+    if (!data.ok) { setEditMsg("Error: " + data.error); return false; }
+    const n = data.changed.length;
+    setEditMsg(n === 0 ? "Nothing changed."
+      : data.workflow && data.workflow.invalidated ? `Saved ${n} change(s). The pending signature was cancelled — the batch must be re-validated before it can be signed.`
+      : `Saved ${n} change(s) and recorded in the edit history.${data.workflow ? " Re-run validation to confirm the problem is gone." : ""}`);
+    setEditReason("");
+    refreshDetail(selectedId); refreshClients(); refreshWriteBacks(selectedId);
+    return true;
+  };
+  const startMasterEdit = () => setMasterForm({ name: detail.name, email: detail.email || "", phone: detail.phone || "", piva: detail.piva || "", codiceFiscale: detail.codiceFiscale || "", ateco: detail.ateco || "", regime: detail.regime });
+  const saveMaster = async () => { if (await patch("", masterForm)) setMasterForm(null); };
+  const startLineEdit = (l) => { setLineEditId(l.id); setLineForm({ supplier: l.supplier, net: l.net, vat: l.vat, account: l.account || "", piva: l.piva || "", natura: l.natura || "", date: l.date || "" }); setEditMsg(null); };
+  const saveLine = async () => {
+    const changes = { ...lineForm };
+    for (const k of ["net", "vat"]) changes[k] = String(changes[k]);
+    if (!changes.account) delete changes.account;
+    if (await patch(`/lines/${lineEditId}`, changes)) setLineEditId(null);
+  };
+  const revertAll = async () => {
+    if (!confirm("Undo every edit made to this client and restore the original data?")) return;
+    const res = await fetch(`/api/clients/${selectedId}/edits/revert`, { method: "POST" });
+    const data = await res.json();
+    setEditMsg(data.ok ? `Reverted ${data.reverted} edit(s).` : "Error: " + data.error);
+    refreshDetail(selectedId); refreshClients(); refreshWriteBacks(selectedId);
+  };
+  const sendMail = async () => {
+    setMailMsg(null); setMailSending(true);
+    try {
+      const res = await fetch(`/api/clients/${selectedId}/email`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mailForm) });
+      const data = await res.json();
+      if (data.ok) { setMailMsg(data.record && data.record.live ? "Email sent." : "Email recorded (offline stub — set SMTP_* in Agent Desk to really send)."); setMailForm({ subject: "", body: "" }); refreshMail(selectedId); }
+      else setMailMsg("Error: " + data.error);
+    } finally { setMailSending(false); }
   };
 
   useEffect(() => {
     if (!selectedId) return;
     setXml(null); setDocMsg(null); setAcctMsg(null);
+    setMasterForm(null); setLineEditId(null); setEditMsg(null); setMailMsg(null); setMail({ email: null, messages: [], unavailable: false });
     setNewAccount({ code: "", name: "", rate: "", natura: "" });
     refreshDetail(selectedId);
     refreshWriteBacks(selectedId);
     // Agent Desk writes back from a separate process — poll so a write-back
     // that arrives while this page is open actually shows up without a manual refresh.
-    const id = setInterval(() => refreshWriteBacks(selectedId), 3000);
+    const id = setInterval(() => { refreshWriteBacks(selectedId); refreshMail(selectedId); }, 3000);
     return () => clearInterval(id);
   }, [selectedId]);
 
@@ -186,6 +257,10 @@ function App() {
           <div className="form">
             <label>Name</label>
             <input value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} placeholder="e.g. Nuovo Cliente Srl" />
+            <label>Email (where the studio writes to this client)</label>
+            <input value={newClient.email || ""} onChange={e => setNewClient({...newClient, email: e.target.value})} placeholder="e.g. amministrazione@cliente.it (optional)" />
+            <label>Phone / WhatsApp (international format)</label>
+            <input value={newClient.phone || ""} onChange={e => setNewClient({...newClient, phone: e.target.value})} placeholder="+393331234567 (optional)" />
             <div className="row2">
               <div><label>Partita IVA</label><input value={newClient.piva} onChange={e => setNewClient({...newClient, piva: e.target.value})} placeholder="11 digits" /></div>
               <div><label>ATECO</label><input value={newClient.ateco} onChange={e => setNewClient({...newClient, ateco: e.target.value})} placeholder="e.g. 46.90.00" /></div>
@@ -221,13 +296,39 @@ function App() {
           <span className="badge">{detail.regime}</span>
           <span className="badge">ATECO {detail.ateco}</span>
           {detail.vatGroup && <span className="badge">VAT Group member</span>}
+          <span className="badge">✉ {detail.email || "no email on file"}</span>
+          <span className="badge">📱 {detail.phone || "no phone on file"}</span>
+          {!masterForm && <button className="linkbtn" onClick={startMasterEdit}>Edit client</button>}
+          {masterForm && (<div className="section">
+            <h4>Edit client details</h4>
+            <div className="row2">
+              <div><label>Name</label><input value={masterForm.name} onChange={e => setMasterForm({...masterForm, name: e.target.value})} /></div>
+              <div><label>Email</label><input value={masterForm.email} onChange={e => setMasterForm({...masterForm, email: e.target.value})} /></div>
+            </div>
+            <div className="row2">
+              <div><label>Phone / WhatsApp (international format)</label><input value={masterForm.phone} placeholder="+393331234567" onChange={e => setMasterForm({...masterForm, phone: e.target.value})} /></div>
+              <div></div>
+            </div>
+            <div className="row2">
+              <div><label>Partita IVA</label><input value={masterForm.piva} onChange={e => setMasterForm({...masterForm, piva: e.target.value})} /></div>
+              <div><label>Codice fiscale</label><input value={masterForm.codiceFiscale} onChange={e => setMasterForm({...masterForm, codiceFiscale: e.target.value})} /></div>
+            </div>
+            <div className="row2">
+              <div><label>ATECO</label><input value={masterForm.ateco} onChange={e => setMasterForm({...masterForm, ateco: e.target.value})} /></div>
+              <div><label>Regime</label><select value={masterForm.regime} onChange={e => setMasterForm({...masterForm, regime: e.target.value})}><option value="ordinaria">ordinaria</option><option value="forfettario">forfettario</option></select></div>
+            </div>
+            <label>Why (kept in the edit history)</label>
+            <input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="e.g. client confirmed the correct P.IVA by email" />
+            <button className="primary" onClick={saveMaster}>Save changes</button> <button className="linkbtn" onClick={() => setMasterForm(null)}>Cancel</button>
+          </div>)}
+          {editMsg && <div className={editMsg.startsWith("Error") ? "err" : "meta"} style={{marginTop:8}}>{editMsg}</div>}
           {detail.edgeCase && <div className="edge"><b>What this client demonstrates:</b> {detail.edgeCase}</div>}
 
           <h3>Messages from Agent Desk</h3>
           {writeBacks.length === 0
             ? <p className="muted">No filing updates yet — run a validation for this client in Agent Desk, then check back here (this refreshes automatically).</p>
             : writeBacks.slice().reverse().map((w,i) => {
-                const clean = (w.anomalyCount ?? 0) === 0 && (w.tailCount ?? 0) === 0;
+                const clean = w.status === "awaiting_signature";
                 return (
                   <div className={"msg " + (clean ? "clean" : "open")} key={i}>
                     <div className="icon">{clean ? "✅" : "📨"}</div>
@@ -243,10 +344,34 @@ function App() {
                 );
               })}
 
+          <h3>Workflow — what TeamSystem does next</h3>
+          {workflow.periods.length === 0
+            ? <p className="muted">Nothing to act on yet. Once Agent Desk writes a status back, TeamSystem opens tasks, sends client requests and schedules reminders here.</p>
+            : workflow.periods.map(ps => (
+              <div className="section" key={ps.period}>
+                <h4>{ps.period} <span className={"badge stage-" + ps.stage}>{ps.stage.replace(/_/g, " ")}</span>
+                  {ps.deadline && <span className="muted"> · deadline {ps.deadline}</span>}
+                  {ps.protocol && <span className="badge">protocol {ps.protocol}</span>}</h4>
+                {ps.tasks.length > 0 && <table><thead><tr><th>Task</th><th>Assignee</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>
+                  {ps.tasks.map(t => (
+                    <tr key={t.id}><td>{t.title}{t.detail && t.detail.length > 0 && <div className="hint">{t.detail.join(" · ")}</div>}</td><td>{t.assignee}</td><td>{t.due || "—"}</td><td>{t.status}</td>
+                      <td>{t.status === "open" && t.kind === "sign" && <button className="primary" onClick={() => wfAction(`${ps.period}/sign`, { signedBy: "Studio professional" })}>Sign</button>}
+                          {t.status === "open" && t.kind === "transmit" && <button className="primary" onClick={() => wfAction(`${ps.period}/transmit`)}>Transmit to AdE</button>}
+                          {t.status === "open" && t.kind === "revalidate" && <button className="primary" onClick={() => wfAction(`${ps.period}/revalidate`)}>Re-run in Agent Desk</button>}
+                          {t.status === "open" && ["review_anomalies", "classify_tail", "escalation"].includes(t.kind) && <button className="primary" onClick={() => wfAction(`${ps.period}/tasks/${t.id}/complete`)}>Mark done</button>}</td></tr>
+                  ))}</tbody></table>}
+                {ps.outbox.length > 0 && <div><b style={{fontSize:12}}>Sent to the client</b>
+                  {ps.outbox.map(m => <div className="msg open" key={m.id}><div className="icon">✉️</div><div className="body"><div className="title">{m.subject}</div><div className="summary">{m.body}</div><div className="meta">{m.template} · sent {m.sentAt}{m.dueBy ? ` · reply due ${m.dueBy}` : ""}{m.delivery ? ` · email: ${m.delivery.status}${m.delivery.to ? ` -> ${m.delivery.to}` : ""}` : " · email: sending…"}</div></div></div>)}</div>}
+                {ps.reminders.length > 0 && <div className="hint">Reminders: {ps.reminders.map(r => `${r.on} — ${r.text}${r.fired ? " (fired)" : ""}`).join(" | ")}</div>}
+                <details><summary className="hint">Timeline ({ps.timeline.length})</summary>
+                  {ps.timeline.map((e, i) => <div className="hint" key={i}>{e.at} — {e.event}{e.detail ? `: ${e.detail}` : ""}</div>)}</details>
+              </div>))}
+          {wfMsg && <div className={wfMsg.startsWith("Error") ? "err" : "meta"}>{wfMsg}</div>}
+
           <h3>Chart of accounts</h3>
           <table><thead><tr><th>Code</th><th>Name</th><th>Rate</th><th>Natura</th></tr></thead>
           <tbody>{detail.chartOfAccounts.map(c => (
-            <tr key={c.code}><td>{c.code}</td><td>{c.name}</td><td>{c.rate}%</td><td>{c.natura || "—"}</td></tr>
+            <tr key={c.code}><td>{c.code}</td><td>{c.name}</td><td>{c.rate === null || c.rate === undefined ? <span className="muted">n/a (VAT does not apply)</span> : `${c.rate}%`}</td><td>{c.natura || "—"}</td></tr>
           ))}</tbody></table>
           {detail.chartOfAccounts.length === 0 && <p className="muted">No accounts yet — add one below so rate/category checks have something to validate against.</p>}
 
@@ -265,14 +390,57 @@ function App() {
           </div>
 
           <h3>VAT batch — {batch?.period}</h3>
-          <table><thead><tr><th>ID</th><th>Supplier</th><th>Desc</th><th>Net</th><th>VAT</th><th>Account</th><th>Conf.</th><th></th></tr></thead>
-          <tbody>{batch?.lines.map(l => (
+          <table><thead><tr><th>ID</th><th>Supplier</th><th>Desc</th><th>Net</th><th>VAT</th><th>Account</th><th>Supplier P.IVA</th><th>Conf.</th><th></th></tr></thead>
+          <tbody>{batch?.lines.map(l => lineEditId === l.id ? (
+            <tr key={l.id}>
+              <td>{l.id}</td>
+              <td><input value={lineForm.supplier} onChange={e => setLineForm({...lineForm, supplier: e.target.value})} /></td>
+              <td>{l.desc}<div className="hint">date <input style={{width:110}} value={lineForm.date} onChange={e => setLineForm({...lineForm, date: e.target.value})} /> natura <input style={{width:70}} value={lineForm.natura} onChange={e => setLineForm({...lineForm, natura: e.target.value})} placeholder="N6.7" /></div></td>
+              <td><input value={lineForm.net} onChange={e => setLineForm({...lineForm, net: e.target.value})} /></td>
+              <td><input value={lineForm.vat} onChange={e => setLineForm({...lineForm, vat: e.target.value})} /></td>
+              <td><select value={lineForm.account} onChange={e => setLineForm({...lineForm, account: e.target.value})}>
+                {!lineForm.account && <option value="">—</option>}
+                {detail.chartOfAccounts.map(c => <option key={c.code} value={c.code}>{c.code} {c.name} ({c.rate}%)</option>)}
+              </select></td>
+              <td><input value={lineForm.piva} onChange={e => setLineForm({...lineForm, piva: e.target.value})} placeholder="11 digits" /></td>
+              <td>{l.confidence}</td>
+              <td><input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="why?" />
+                <button className="primary" onClick={saveLine}>Save</button> <button className="linkbtn" onClick={() => setLineEditId(null)}>Cancel</button></td>
+            </tr>
+          ) : (
             <tr key={l.id}>
               <td>{l.id}</td><td>{l.supplier}</td><td>{l.desc}</td>
-              <td>€{l.net}</td><td>€{l.vat}</td><td>{l.account || "—"}</td><td>{l.confidence}</td>
-              <td><span className="xmlbtn" onClick={() => showXml(l.id)}>view XML</span></td>
+              <td>€{l.net}</td><td>€{l.vat}</td><td>{l.account || "—"}</td><td>{l.piva || "—"}</td><td>{l.confidence}</td>
+              <td><span className="xmlbtn" onClick={() => showXml(l.id)}>view XML</span> <button className="linkbtn" onClick={() => startLineEdit(l)}>Edit</button></td>
             </tr>
           ))}</tbody></table>
+          <p className="hint">To fix a problem Agent Desk reported, edit the line (VAT amount, account, supplier P.IVA…) or upload the missing document below, then re-run validation. Every edit is recorded in the edit history.</p>
+
+          <div className="section">
+            <h4>Email {detail.name}</h4>
+            <div className="hint" style={{marginTop:0}}>To: {mail.email || detail.email || "(no address on file — use Edit client)"}{mail.unavailable ? " · Agent Desk email channel not reachable" : ""}</div>
+            <label>Subject</label>
+            <input value={mailForm.subject} onChange={e => setMailForm({...mailForm, subject: e.target.value})} placeholder="e.g. Documents needed for the Q3 VAT filing" />
+            <label>Message</label>
+            <textarea style={{height:90,fontFamily:"inherit",fontSize:13}} value={mailForm.body} onChange={e => setMailForm({...mailForm, body: e.target.value})} />
+            <button className="primary" disabled={mailSending || !mailForm.subject.trim() || !mailForm.body.trim() || !detail.email} onClick={sendMail}>{mailSending ? "Sending…" : "Send email"}</button>
+            {mailMsg && <div className={mailMsg.startsWith("Error") ? "err" : "meta"} style={{marginTop:8}}>{mailMsg}</div>}
+            {mail.messages.length > 0 && <div style={{marginTop:10}}><b style={{fontSize:12}}>Thread with this client</b>
+              {mail.messages.map(m => (
+                <div className="msg" key={m.id}><div className="icon">{m.direction === "out" ? "➡️" : "⬅️"}</div><div className="body">
+                  <div className="title">{m.subject}</div>
+                  <div className="summary">{(m.text || "").slice(0, 300)}</div>
+                  <div className="meta">{m.direction === "out" ? `to ${m.to}` : `from ${m.from}`} · {m.status} · {m.at}
+                    {m.attachments && m.attachments.length > 0 && ` · attachments: ${m.attachments.map(a => a.filename + (a.outcome ? " -> " + a.outcome : "")).join(" | ")}`}</div>
+                </div></div>))}
+            </div>}
+          </div>
+
+          {editLog.length > 0 && <details className="section"><summary><b>Edit history ({editLog.length})</b></summary>
+            <table><thead><tr><th>When</th><th>By</th><th>Where</th><th>Field</th><th>Before</th><th>After</th><th>Why</th></tr></thead>
+            <tbody>{editLog.map((e, i) => <tr key={i}><td>{e.at}</td><td>{e.by}</td><td>{e.target}</td><td>{e.field}</td><td>{String(e.from)}</td><td>{String(e.to)}</td><td>{e.reason || "—"}</td></tr>)}</tbody></table>
+            <button className="linkbtn" onClick={revertAll}>Revert all edits</button>
+          </details>}
 
           {batch?.expected.length > 0 && (<div>
             <h3>Expected but not received</h3>
