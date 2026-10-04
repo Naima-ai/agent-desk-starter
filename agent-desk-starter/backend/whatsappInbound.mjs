@@ -19,6 +19,7 @@ import {
 } from "./lAmministrativo.mjs";
 import { publish } from "./bus.mjs";
 import { publishA2A } from "./messaging/a2aBus.mjs";
+import * as wa from "./connectors/whatsapp.mjs";
 
 // Same two-step resolution as the "Mark received" / correction-resolve endpoints in
 // server.mjs: publish the outgoing A2A message (document_delivered / answer_with_evidence)
@@ -39,9 +40,12 @@ async function publishThenCommit(resolution) {
 
 // Every message sent for an item is remembered (the first send AND each
 // reminder), so a reply to any of them matches — not only the most recent.
-function findByMessageId(map, contextId) {
+// Also requires the item to belong to the sender's own client: a quoted message id
+// is hard to guess, but there's no reason to let one client's reply touch another's item.
+function findByMessageId(map, contextId, clientId) {
   if (!contextId) return null;
   for (const item of map.values()) {
+    if (clientId && item.clientId !== clientId) continue;
     if (item.waMessageIds?.includes(contextId) || item.lastWaMessageId === contextId) return item;
   }
   return null;
@@ -72,24 +76,43 @@ function parseDecision(text) {
  * ambiguous reply — a webhook endpoint failing loudly just makes Meta retry
  * the same message again, it doesn't help anyone.
  */
-export async function applyInboundReply({ from, text, context, verified = false }) {
+export async function applyInboundReply({ from, clientId = null, text, context, verified = false, documents = [] }) {
   const contextId = context?.id || null;
 
-  const docReq = findByMessageId(pendingDocumentRequests, contextId);
+  // A document request is only "received" when a document actually arrived and
+  // TeamSystem filed it. A text-only reply ("ecco la fattura", "la mando domani")
+  // keeps the request open, and the owner is asked again for the file.
+  const filed = documents.filter((d) => d.filed);
+  let docReq = findByMessageId(pendingDocumentRequests, contextId, clientId);
+  if (!docReq && !contextId && filed.length) {
+    // A file sent without quoting the request: link it only when there's exactly one
+    // open document request for this client, so it can't land on the wrong one.
+    const open = [...pendingDocumentRequests.values()].filter((r) => r.clientId === clientId && r.status === "pending");
+    if (open.length === 1) docReq = open[0];
+  }
   if (docReq) {
-    const result = await publishThenCommit(prepareDocumentRequestResolution(docReq.id, { foundVia: "whatsapp_reply" }));
-    if (result) publish("feed", { agent: "l_amministrativo", tone: "good", text: `Document request ${docReq.id} resolved by WhatsApp reply from ${from}.` });
+    if (!filed.length) {
+      const why = documents.length ? documents.map((d) => d.outcome).join("; ") : "no document attached";
+      publish("feed", { agent: "l_amministrativo", tone: "warn", text: `Owner replied to request ${docReq.id}${text ? ` ("${text}")` : ""}, but ${why} — still waiting for the invoice.` });
+      const ask = await wa.sendText(from, documents.length
+        ? "Grazie! Non riusciamo a leggere questo file come fattura. Può inviarla in PDF o XML rispondendo a questo messaggio?"
+        : "Grazie! Non vediamo nessun documento allegato. Può inviare la fattura (PDF o XML) rispondendo a questo messaggio?");
+      if (ask?.id) (docReq.waMessageIds ||= []).push(ask.id); // a reply to this follow-up matches the same request
+      return { matched: "document_request", id: docReq.id, resolved: false, reason: "no_document" };
+    }
+    const result = await publishThenCommit(prepareDocumentRequestResolution(docReq.id, { foundVia: "whatsapp_document" }));
+    if (result) publish("feed", { agent: "l_amministrativo", tone: "good", text: `Document request ${docReq.id} resolved: ${filed.map((d) => `${d.filename} (${d.outcome})`).join("; ")}.` });
     return { matched: "document_request", id: docReq.id, resolved: Boolean(result) };
   }
 
-  const correction = findByMessageId(pendingCorrections, contextId);
+  const correction = findByMessageId(pendingCorrections, contextId, clientId);
   if (correction) {
     const result = await publishThenCommit(prepareCorrectionResolution(correction.id, { answer: text, confirmedBy: `whatsapp:${from}` }));
     if (result) publish("feed", { agent: "l_amministrativo", tone: "good", text: `Correction ${correction.id} confirmed by WhatsApp reply from ${from}.` });
     return { matched: "correction", id: correction.id, resolved: Boolean(result) };
   }
 
-  const gate = findByMessageId(pendingGates, contextId);
+  const gate = findByMessageId(pendingGates, contextId, clientId);
   if (gate) {
     // An unsigned webhook (WHATSAPP_APP_SECRET not set) can't prove it came
     // from Meta, so it is never allowed to approve or deny a gate. Document
@@ -115,6 +138,10 @@ export async function applyInboundReply({ from, text, context, verified = false 
   // Received and matched to the client, but not a reply to anything still open:
   // a fresh message (not a quoted Reply), or a reply to an item that's already
   // closed or was lost on a server restart. Say so, instead of staying silent.
+  if (filed.length) {
+    publish("feed", { agent: "l_amministrativo", tone: "info", text: `${filed.map((d) => d.filename).join(", ")} from ${from} filed in TeamSystem, but not linked to a specific request — use "Mark received" in Approvals if it answers one.` });
+    return { matched: null, resolved: false, filed: filed.length };
+  }
   publish("feed", { agent: "l_amministrativo", tone: "info", text: contextId
     ? `WhatsApp reply from ${from} quotes a message with no open request behind it (already resolved, or the server restarted since it was sent).`
     : `WhatsApp message from ${from} isn't a reply to a specific request — nothing resolved. Long-press the request message and use Reply.` });

@@ -77,12 +77,17 @@ export async function handleWhatsAppRoute(req, res, url, readBody) {
         const messages = change?.value?.messages || [];
         for (const m of messages) {
           const from = normalizePhone(m.from);
-          // Only plain text and button/quick-reply text are handled today —
-          // images, documents, audio etc. are logged with empty text rather
-          // than dropped outright, so there's still a record something arrived.
-          const messageText = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? "";
-          const ingestResult = await wa.ingestInbound({ from, text: messageText, messageId: m.id, context: m.context });
-          if (ingestResult.matched) await applyInboundReply({ from, text: messageText, context: m.context, verified: sig.checked });
+          // Text, buttons, and files: a document (PDF/XML/CSV) is downloaded and filed in
+          // TeamSystem; a photo is recorded but can't be read as an invoice. Audio, stickers
+          // etc. are logged with empty text, so there's still a record something arrived.
+          const media = m.document ? { kind: "document", id: m.document.id, filename: m.document.filename, mimeType: m.document.mime_type }
+            : m.image ? { kind: "image", id: m.image.id, mimeType: m.image.mime_type }
+            : null;
+          const messageText = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? m.document?.caption ?? m.image?.caption ?? "";
+          const ingestResult = await wa.ingestInbound({ from, text: messageText, messageId: m.id, context: m.context, media });
+          if (ingestResult.matched) {
+            await applyInboundReply({ from, clientId: ingestResult.client.id, text: messageText, context: m.context, verified: sig.checked, documents: ingestResult.documents || [] });
+          }
         }
       }
     } catch (e) {

@@ -105,7 +105,14 @@ async function executeRun(clientId, run) {
   await wait(600);
 
   // 2 — L'Addetto IVA validates completeness, coherence, prior periods & VAT rules.
-  let received = [];
+  // An expected invoice counts as received when the period's batch already holds a
+  // line from that supplier — e.g. the owner's document, filed in TeamSystem on an
+  // earlier run. Starting from an empty list asked the owner again, every run, for
+  // an invoice TeamSystem already had.
+  const sameSupplier = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+  let received = (vatBatch.expected || [])
+    .filter((e) => vatBatch.lines.some((l) => sameSupplier(l.supplier, e.supplier)))
+    .map((e) => ({ supplier: e.supplier, period: e.period }));
   let { tail, anomalies } = validateBatch(vatBatch, { receivedDocs: received, priorPeriod, taxonomy: chartOfAccounts, vatGroup: master.vatGroup, formatAnomalies: vatBatch.formatAnomalies });
   const initialTail = tail.length, initialAnomalies = anomalies.length;
   run.record("validated", { tail: initialTail, anomalies: initialAnomalies, rules: anomalies.map((a) => a.ruleId) });
@@ -221,7 +228,25 @@ async function executeRun(clientId, run) {
         const outcome = await waitForDocumentRequest(result.requestId, OWNER_REPLY_TIMEOUT_MS);
         run.record("owner_reply", { requestId: result.requestId, outcome });
         if (outcome === "resolved") {
-          gotDocument = true;
+          // The truth is what TeamSystem now holds, not a made-up line: re-read the
+          // batch and take the line(s) the owner's document actually produced.
+          const supplier = an.expected.replace(/^invoice\s+/i, "").trim();
+          const fresh = await teamSystem.readVatBatch(clientId, period);
+          const known = new Set(vatBatch.lines.map((l) => l.id));
+          const newLines = fresh.lines.filter((l) => !known.has(l.id) && sameSupplier(l.supplier, supplier));
+          if (newLines.length) {
+            for (const line of newLines) {
+              // A freshly filed invoice arrives unclassified — classify it like any tail line.
+              const r = await classifyLine(line, vatBatch.client, chartOfAccounts);
+              if (!r.needsHuman) { line.account = r.account; line.confidence = r.confidence; }
+              vatBatch.lines.push(line);
+              run.record("document_line_added", { line: line.id, supplier: line.supplier, net: line.net, vat: line.vat, account: line.account });
+            }
+            received.push({ supplier, period: an.period });
+            feed("l_addetto_iva", `Invoice from ${supplier} read from the owner's document in TeamSystem: ${newLines.map((l) => `${l.id} (net €${l.net}, VAT €${l.vat}${l.account ? `, account ${l.account}` : ", needs a category"})`).join("; ")} — added to the batch.`, "good");
+          } else {
+            feed("l_addetto_iva", `The owner's document is filed in TeamSystem, but no ${supplier} invoice line could be read from it — a person needs to enter it in TeamSystem. Item stays open.`, "warn");
+          }
         } else {
           feed("l_amministrativo", `No reply from the owner yet — request ${result.requestId} stays open. Continuing with the invoice still missing; re-run Validate once it arrives.`, "warn");
         }
@@ -242,7 +267,9 @@ async function executeRun(clientId, run) {
       }
 
       if (gotDocument) {
-        feed("l_addetto_iva", "Missing invoice received — re-inserted into the batch.", "good");
+        // Offline/simulated path only: no real document exists, so the demo inserts
+        // its fixture line. The live path above uses what TeamSystem actually holds.
+        feed("l_addetto_iva", "Missing invoice received (simulated) — re-inserted into the batch.", "good");
         vatBatch.lines.push({ id: "L5", supplier: "Verdi Srl", desc: "Fornitura mensile", net: 600.0, vat: 132.0, account: "30.10", confidence: 0.95 });
         received.push({ supplier: "Verdi Srl", period: an.period });
       }
