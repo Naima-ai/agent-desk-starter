@@ -44,6 +44,8 @@ export function createGuard({ port, csp, publicPaths = [] }) {
     ...(process.env.ALLOWED_ORIGINS || "").split(",").map(trim).filter(Boolean),
   ]);
   const session = accessToken ? createHmac("sha256", accessToken).update("desk-session-v1").digest("hex") : "";
+  const publicRules = publicPaths.map((p) => (typeof p === "string" ? { path: p, methods: ["POST"] } : { path: p.path, methods: p.methods || ["POST"] }));
+  const isPublic = (pathname, method) => publicRules.some((r) => r.path === pathname && r.methods.includes(method));
   const attempts = new Map(); // ip -> { n, resetAt }
 
   if (!accessToken) console.warn("[security] DESK_ACCESS_TOKEN is not set — API is unauthenticated. Fine for local dev; set it before exposing this service.");
@@ -107,7 +109,12 @@ export function createGuard({ port, csp, publicPaths = [] }) {
 
     if (!accessToken) return true;
     // Machine-to-machine callbacks (e.g. an inbound-email webhook) that authenticate themselves with their own secret.
-    if (publicPaths.includes(url.pathname) && req.method === "POST") return true;
+    // Entries are either a plain path string (POST only — the original, default behaviour)
+    // or { path, methods } for a callback that genuinely needs another verb. Meta's
+    // WhatsApp webhook is the one case: its verification handshake is a GET, checked
+    // against WHATSAPP_WEBHOOK_VERIFY_TOKEN inside whatsappRoutes.mjs. Every other
+    // public path stays POST-only.
+    if (isPublic(url.pathname, req.method)) return true;
 
     if (url.pathname === "/login" && req.method === "POST") {
       const ip = req.socket.remoteAddress || "?";

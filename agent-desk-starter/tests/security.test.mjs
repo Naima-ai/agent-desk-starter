@@ -6,7 +6,7 @@ process.env.DESK_ACCESS_TOKEN = "test-token-123";
 process.env.ALLOWED_ORIGINS = "https://desk.example.com";
 const { createGuard, readBodyLimited } = await import("../backend/security.mjs");
 
-const guard = createGuard({ port: 5999, csp: "default-src 'self'", publicPaths: ["/api/hook"] }).guard;
+const guard = createGuard({ port: 5999, csp: "default-src 'self'", publicPaths: ["/api/hook", { path: "/api/wa-hook", methods: ["GET", "POST"] }] }).guard;
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   if (!(await guard(req, res, url))) return;
@@ -73,6 +73,13 @@ test("hardening headers are set", async () => {
 test("a declared public webhook path skips the access token (it checks its own secret)", async () => {
   assert.equal((await fetch(`${base}/api/hook`, { method: "POST" })).status, 200);
   assert.equal((await fetch(`${base}/api/hook`)).status, 401, "only POST is exempt");
+});
+
+test("a public path can opt in to GET explicitly (WhatsApp's verification handshake); others stay POST-only", async () => {
+  assert.equal((await fetch(`${base}/api/wa-hook`)).status, 200, "GET allowed where declared");
+  assert.equal((await fetch(`${base}/api/wa-hook`, { method: "POST" })).status, 200);
+  assert.equal((await fetch(`${base}/api/wa-hook`, { method: "DELETE" })).status, 401, "undeclared verbs still need the token");
+  assert.equal((await fetch(`${base}/api/hook`)).status, 401, "string entries keep the POST-only default");
 });
 
 test("request bodies are size-capped", async () => {
