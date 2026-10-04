@@ -40,6 +40,7 @@ function emitLadderEvent(evt) { ladderEvents.emit("event", { seat: SEAT, at: new
 export const pendingGates = new Map();
 export const pendingDocumentRequests = new Map();
 export const pendingQuestions = new Map();
+export const pendingCorrections = new Map();
 
 // ---------------------------------------------------------------------------
 // Hard blocks. Enforced at the tool layer, in code, on every call —
@@ -394,6 +395,88 @@ export async function handleInstructionFromStudio(manifest, clientId, message, r
   return { ack, ...result };
 }
 
+export async function handleCorrectionRequest(manifest, clientId, message, runtime = null) {
+  const ack = outbound(runtime, clientId, { type: "acknowledgment", ref: `correction:${message.ruleId}`.slice(0, 60) });
+
+  const correctionId = `corr_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  const correction = {
+    id: correctionId, seat: SEAT, clientId,
+    ruleId: message.ruleId, message: message.message, period: message.period,
+    status: "pending", remindersSent: 0, escalated: false,
+    createdAt: new Date().toISOString(),
+  };
+  const vars = { rule: message.ruleId, period: message.period, detail: message.message };
+  const ping = () => runtime?.sendOwner
+    ? runtime.sendOwner("confirm_correction", vars)
+    : wa.sendTemplate(getOwnerPhone(clientId), "confirm_correction", vars);
+  await ping();
+  pendingCorrections.set(correctionId, correction);
+  emitLadderEvent({ kind: "correction", event: "opened", correctionId, clientId, ruleId: message.ruleId });
+
+    if (runtime?.scheduleLadder !== false) {
+    const ladderCfg = message.ladder || {};
+    correction._ladder = startLadder({
+      reminderDelaysMs: ladderCfg.reminderDelaysMs ?? DEFAULT_LADDER.reminderDelaysMs,
+      escalateAfterMs: ladderCfg.escalateAfterMs ?? DEFAULT_LADDER.escalateAfterMs,
+      onRemind: async (n) => {
+        if (correction.status !== "pending") return;
+        correction.remindersSent = n;
+        await ping();
+        emitLadderEvent({ kind: "correction", event: "reminder", correctionId, clientId, n });
+      },
+      onEscalate: () => {
+        if (correction.status !== "pending") return;
+        correction.escalated = true;
+        correction.escalation = outbound(runtime, clientId, {
+          type: "escalation_requested",
+          reason: `Correction ${message.ruleId} (${message.period}) unanswered by the client after ${correction.remindersSent} reminder(s).`,
+        });
+        emitLadderEvent({ kind: "correction", event: "escalate", correctionId, clientId, escalation: correction.escalation });
+              },
+    });
+  }
+
+  return { ack, askedOwner: true, correctionId };
+}
+
+/* The owner has answered. Prepare first so durable callers can persist the outbound message before
+   committing local state (same two-step shape as prepareDocumentRequestResolution). Null if unknown/closed. */
+export function prepareCorrectionResolution(correctionId, { answer, confirmedBy } = {}) {
+  const correction = pendingCorrections.get(correctionId);
+  if (!correction || correction.status !== "pending") return null;
+  const finalAnswer = (answer || "").trim() || "Owner confirmed the correction.";
+  let committed = null;
+    const evidenceId = `corr_ev_${correctionId}`;
+  const a2aMsg = toStudio(correction.clientId, {
+    type: "answer_with_evidence", answer: finalAnswer, evidenceId, ref: correctionId,
+  });
+  return {
+    a2a: a2aMsg,
+    commit() {
+      if (committed) return committed;
+      const current = pendingCorrections.get(correctionId);
+      if (!current || current !== correction || current.status !== "pending") return null;
+      correction._ladder?.cancel();
+      correction.status = "resolved";
+      const ev = evidence.put({
+        id: evidenceId, kind: "correction_answer", clientId: correction.clientId,
+        ruleId: correction.ruleId, period: correction.period, answer: finalAnswer,
+        confirmedBy: confirmedBy || "owner",
+      });
+      writeClientFact(correction.clientId, `correction:${correction.period}:${correction.ruleId}`,
+        { answer: finalAnswer, message: correction.message }, { kind: "correction", evidenceId: ev.id, confirmedBy: confirmedBy || "owner" });
+      pendingCorrections.delete(correctionId);
+      emitLadderEvent({ kind: "correction", event: "resolved", correctionId, clientId: correction.clientId });
+      committed = { evidence: ev, a2a: a2aMsg };
+      return committed;
+    },
+  };
+}
+
+export function resolveCorrection(correctionId, info = {}) {
+  return prepareCorrectionResolution(correctionId, info)?.commit() || null;
+}
+
 // ---------------------------------------------------------------------------
 // Proactive delivery of the monthly pack — 
 // Summarises what THIS seat has itself recorded for the client+period — 
@@ -419,7 +502,11 @@ export async function deliverMonthlyPack(clientId, period) {
     .filter((q) => q.clientId === clientId && q.status === "pending")
     .map((q) => ({ topic: q.topic, askedAt: q.askedAt }));
 
-  const pack = { period, clientId, docs, missing, questions, assembledAt: new Date().toISOString() };
+  const corrections = [...pendingCorrections.values()]
+    .filter((c) => c.clientId === clientId && c.period === period)
+    .map((c) => ({ ruleId: c.ruleId, remindersSent: c.remindersSent, escalated: c.escalated }));
+
+  const pack = { period, clientId, docs, missing, questions, corrections, assembledAt: new Date().toISOString() };
   const ev = evidence.put({ kind: "monthly_pack", clientId, period, itemCount: docs.length, pack });
   writeClientFact(clientId, `pack:${period}`, pack, { kind: "monthly_pack", evidenceId: ev.id });
 

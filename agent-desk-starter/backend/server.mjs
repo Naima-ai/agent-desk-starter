@@ -18,8 +18,8 @@ import { getClientMemory } from "./memory/clientMemory.mjs";
 import { runVatFilingPath } from "./scenario/vatFilingPath.mjs";
 import * as teamSystem from "./connectors/teamSystem.mjs";
 import {
-  pendingGates, pendingDocumentRequests, pendingQuestions,
-  prepareDocumentRequestResolution, deliverMonthlyPack, onLadderEvent,
+  pendingGates, pendingDocumentRequests, pendingQuestions, pendingCorrections,
+  prepareDocumentRequestResolution, prepareCorrectionResolution, deliverMonthlyPack, onLadderEvent,
   collectDocument, draftAndSendInvoice, sendReminder, logAttendanceOrExpense,
   answerEmployeeQuestion, trackDeadline, askStudio,
 } from "./lAmministrativo.mjs";
@@ -362,6 +362,30 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // ---- correction requests relayed to the owner (handleCorrectionRequest) ----
+  if (url.pathname === "/api/corrections" && req.method === "GET") {
+    const list = [...pendingCorrections.values()].map((c) => ({
+      id: c.id, clientId: c.clientId, ruleId: c.ruleId, message: c.message, period: c.period,
+      status: c.status, remindersSent: c.remindersSent, escalated: c.escalated, createdAt: c.createdAt,
+    }));
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
+    return;
+  }
+  const correctionMatch = url.pathname.match(/^\/api\/corrections\/([^/]+)\/resolve$/);
+  if (correctionMatch && req.method === "POST") {
+    const id = decodeURIComponent(correctionMatch[1]);
+    const body = await readBody(req);
+    const { answer, confirmedBy } = body ? JSON.parse(body) : {};
+    const resolution = prepareCorrectionResolution(id, { answer, confirmedBy });
+    if (!resolution) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such correction, or already resolved" })); return; }
+    if (!await publishA2AForRequest(res, resolution.a2a)) return;
+    const result = resolution.commit();
+    if (!result) { res.writeHead(409, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "correction state changed before resolution completed" })); return; }
+    publish("evidence", { record: result.evidence });
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id }));
+    return;
+  }
+
   // ---- open questions to the studio (askStudio / resolveQuestion) ----
   if (url.pathname === "/api/questions" && req.method === "GET") {
     const list = [...pendingQuestions.values()].map((q) => ({ id: q.id, clientId: q.clientId, topic: q.topic, body: q.body, status: q.status, askedAt: q.askedAt }));
@@ -411,7 +435,8 @@ async function handleRequest(req, res) {
     const gates = [...pendingGates.values()].filter((g) => g.clientId === clientId).length;
     const docReqs = [...pendingDocumentRequests.values()].filter((r) => r.clientId === clientId).length;
     const questions = [...pendingQuestions.values()].filter((q) => q.clientId === clientId).length;
-    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ clientId, gates, docReqs, questions }));
+    const corrections = [...pendingCorrections.values()].filter((c) => c.clientId === clientId).length;
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ clientId, gates, docReqs, questions, corrections }));
     return;
   }
 

@@ -8,7 +8,7 @@ import { readSdiInbox } from "../connectors/sdiInbox.stub.mjs";
 import { readMasterData, readPriorPeriod, readVatBatch } from "../connectors/teamSystem.mjs";
 import { sendTemplate } from "../connectors/whatsapp.mjs";
 import { getOwnerPhone } from "../clientDirectory.mjs";
-import { handleInstructionFromStudio } from "../lAmministrativo.mjs";
+import { handleCorrectionRequest, handleInstructionFromStudio } from "../lAmministrativo.mjs";
 import { getRoster } from "../rosterStore.mjs";
 import { route } from "../smistatore.mjs";
 import { AgentRegistry } from "./agentRegistry.mjs";
@@ -46,6 +46,14 @@ const InstructionInputSchema = z.object({
   message: z.object({
     instruction: z.string().min(1),
     due: z.string().optional(),
+  }).strict(),
+}).strict();
+
+const CorrectionInputSchema = z.object({
+  message: z.object({
+    ruleId: z.string().min(1),
+    message: z.string().min(1),
+    period: z.string().min(1),
   }).strict(),
 }).strict();
 
@@ -204,6 +212,23 @@ export const defaultToolRegistry = new ToolRegistry()
     execute: ({ to, template, vars }) => sendTemplate(to, template, vars),
   });
 
+// Guarded capabilities handed to L'Amministrativo's business code for one bounded run.
+function administrativoRuntime(ctx) {
+  return {
+    movements: () => ctx.tools.invoke("bankfeed.read", { clientId: ctx.identity.clientId }),
+    readInbox: () => ctx.tools.invoke("sdi.inbox", { clientId: ctx.identity.clientId }),
+    // The owner's number on file in TeamSystem; the literal "owner" only if none is recorded yet.
+    sendOwner: async (template, vars) => ctx.tools.invoke("whatsapp.owner_employees", {
+      clientId: ctx.identity.clientId, to: process.env.WHATSAPP_TEST_RECIPIENT || (await readMasterData(ctx.identity.clientId)).phone || getOwnerPhone(ctx.identity.clientId), template, vars,
+    }),
+    toStudio: (message) => {
+      const { type, ...payload } = message;
+      return ctx.messages.emit(type, payload, { to: "lo_smistatore" });
+    },
+    scheduleLadder: false,
+  };
+}
+
 export const defaultAgentRegistry = new AgentRegistry()
   .register({
     seat: "lo_smistatore",
@@ -240,25 +265,17 @@ export const defaultAgentRegistry = new AgentRegistry()
         inputSchema: InstructionInputSchema,
         tools: ["bankfeed.read", "sdi.inbox", "whatsapp.owner_employees"],
         handler: async (input, ctx) => {
-          const result = await handleInstructionFromStudio(
-            ctx.manifest,
-            ctx.identity.clientId,
-            input.message,
-            {
-              movements: () => ctx.tools.invoke("bankfeed.read", { clientId: ctx.identity.clientId }),
-              readInbox: () => ctx.tools.invoke("sdi.inbox", { clientId: ctx.identity.clientId }),
-              // The owner's number on file in TeamSystem; the literal "owner" only if none is recorded yet.
-              sendOwner: async (template, vars) => ctx.tools.invoke("whatsapp.owner_employees", {
-                clientId: ctx.identity.clientId, to: process.env.WHATSAPP_TEST_RECIPIENT || (await readMasterData(ctx.identity.clientId)).phone || getOwnerPhone(ctx.identity.clientId), template, vars,
-              }),
-              toStudio: (message) => {
-                const { type, ...payload } = message;
-                return ctx.messages.emit(type, payload, { to: "lo_smistatore" });
-              },
-              scheduleLadder: false,
-            },
-          );
+          const result = await handleInstructionFromStudio(ctx.manifest, ctx.identity.clientId, input.message, administrativoRuntime(ctx));
           const { ack, a2a, ...artifact } = result;
+          return { artifacts: [artifact] };
+        },
+      },
+      handle_correction: {
+        inputSchema: CorrectionInputSchema,
+        tools: ["whatsapp.owner_employees"],
+        handler: async (input, ctx) => {
+          const result = await handleCorrectionRequest(ctx.manifest, ctx.identity.clientId, input.message, administrativoRuntime(ctx));
+          const { ack, ...artifact } = result;
           return { artifacts: [artifact] };
         },
       },

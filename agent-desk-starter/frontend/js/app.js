@@ -6,14 +6,14 @@
   const { Sidebar, ViewHeader, Roster, AgentPage, A2AStream, Board, Memory, Approvals, Clients, Team } = window.AgentDeskComponents;
 
   const VIEW_META = {
-    clients:   { title: "Clients",      description: "Search TeamSystem's client book, pick a client, then validate its VAT batch through the real pipeline." },
-    roster:    { title: "Roster",       description: "Every seat on the desk \u2014 who they are and where they run." },
-    team:      { title: "Team",         description: "Lo Smistatore's real staff roster \u2014 who it actually routes messages to." },
-    agent:     { title: "Agent page",   description: "Compile a seat from its job description and inspect what it produces." },
-    stream:    { title: "A2A stream",   description: "Typed, signed messages moving between agents" },
-    board:     { title: "Board",        description: "The pre-filing validation flow, step by step, as it runs." },
-    memory:    { title: "Memory panel", description: "Cortex memory per client (every action taken, what was learned), plus what's been proven (evidence) and what's believed (knowledge), live." },
-    approvals: { title: "Approvals",    description: "Everything waiting on a human \u2014 owner sign-off and missing documents." },
+    clients:   { title: "Clients" },
+    roster:    { title: "Roster" },
+    team:      { title: "Team" },
+    agent:     { title: "Agent page" },
+    stream:    { title: "A2A stream" },
+    board:     { title: "Board" },
+    memory:    { title: "Memory panel" },
+    approvals: { title: "Approvals" },
   };
 
   function App() {
@@ -53,7 +53,7 @@
       h(Sidebar, { view, setView, pendingCount }),
       h("main", { className: "main" },
         h("div", { className: "main-inner" },
-          h(ViewHeader, { title: meta.title, description: meta.description, live }),
+          h(ViewHeader, { title: meta.title, live }),
           content)));
   }
 

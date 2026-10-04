@@ -127,7 +127,7 @@ test("unsupported recipient messages fail permanently into dead letters", async 
   await h.consumers.start();
   const message = makeMessage({
     from: "lo_smistatore", to: "l_amministrativo", client: "client-a",
-    type: "correction_request", ruleId: "VAT-1", message: "Wrong VAT rate", period: "2026-Q3",
+    type: "pack_delivered", period: "2026-Q3", items: 1,
   });
   await h.bus.publishA2A(message);
   await waitFor(async () => (await h.bus.deadLetters()).length === 1);
@@ -141,4 +141,27 @@ test("legacy A2A publication through the UI bus is rejected", () => {
     () => publish("a2a", { message: {} }),
     /must use publishA2A/,
   );
+});
+
+test("correction_request is relayed to the owner through the runtime and closed by the owner's answer", async (t) => {
+  const calls = [];
+  const h = harness(async (request) => {
+    calls.push(request);
+    return { status: "completed", artifacts: [{ askedOwner: true, correctionId: "corr-test" }], messages: [], error: null };
+  });
+  t.after(async () => { await h.consumers.close(); await h.bus.close(); });
+  await h.consumers.start();
+  const message = makeMessage({
+    from: "lo_smistatore", to: "l_amministrativo", client: "client-a",
+    type: "correction_request", ruleId: "VAT-1", message: "Wrong VAT rate", period: "2026-Q3",
+    correlationId: "workflow-2",
+  });
+  await h.bus.publishA2A(message);
+  const outcome = await h.consumers.waitForOutcome(message.id);
+  assert.equal(outcome.result.correctionId, "corr-test");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].seat, "l_amministrativo");
+  assert.equal(calls[0].operation, "handle_correction");
+  assert.deepEqual(calls[0].input.message, { ruleId: "VAT-1", message: "Wrong VAT rate", period: "2026-Q3" });
+  assert.equal(calls[0].context.causationId, message.id);
 });

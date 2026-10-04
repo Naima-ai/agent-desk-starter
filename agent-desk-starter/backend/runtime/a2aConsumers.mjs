@@ -91,6 +91,26 @@ export class RuntimeA2AConsumers {
       this.#record(message.id, { status: "completed", recipient: "l_amministrativo", result });
       return result;
     }
+    if (message.type === "correction_request") {
+      const run = await this.engine.runAgent({
+        runId: `a2a:${message.id}:correct`,
+        seat: "l_amministrativo",
+        operation: "handle_correction",
+        input: { message: { ruleId: message.ruleId, message: message.message, period: message.period } },
+        context: {
+          clientId: message.client,
+          correlationId: message.correlationId || message.id,
+          causationId: message.id,
+          actor: `agent:${message.from}`,
+        },
+      });
+      if (run.status !== "completed" && run.status !== "awaiting_approval" && run.status !== "refused") {
+        throw runtimeFailure(run);
+      }
+      const outcome = { status: run.status, recipient: "l_amministrativo", result: run.artifacts[0] || null, run };
+      this.#record(message.id, outcome);
+      return outcome;
+    }
     if (message.type !== "instruction_from_studio") {
       throw permanentFailure(
         "UNSUPPORTED_RECIPIENT_MESSAGE",
