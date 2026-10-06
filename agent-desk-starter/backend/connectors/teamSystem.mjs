@@ -211,6 +211,12 @@ export async function findClientByEmail(email) {
   catch { return null; }
 }
 
+/** Which client owns this WhatsApp number? null if none (or TeamSystem is unreachable). */
+export async function findClientByPhone(phone) {
+  try { return await tsFirm(`/api/clients/by-phone?phone=${encodeURIComponent(phone)}`); }
+  catch { return null; }
+}
+
 /** File a document received by email into the client's TeamSystem record,
  *  through the same endpoints the studio's own uploads use: PDF -> attachment,
  *  XML/CSV -> parsed into invoice line(s). Returns { summary }. */

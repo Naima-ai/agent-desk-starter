@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname, resolve, sep } from "node:path";
 import { createGuard, listenHost, readBodyLimited, serviceAuthHeaders } from "./security.mjs";
-import { clients, getClient, getClientByEmail, listClients } from "./data/clients.mjs";
+import { clients, getClient, getClientByEmail, getClientByPhone, listClients } from "./data/clients.mjs";
 import { toFatturaPaXml } from "./xmlGenerator.mjs";
 import { toRawJsonFeed, toRawCsv } from "./rawFeeds.mjs";
 import { editClient, editLine, getEditLog, revertEdits } from "./edits.mjs";
@@ -78,6 +78,14 @@ async function handleRequest(req, res) {
     const c = getClientByEmail(url.searchParams.get("email"));
     if (!c) { json(res, 404, { error: "no client with that email" }); return; }
     json(res, 200, { id: c.id, name: c.name, email: c.email });
+    return;
+  }
+
+  // GET /api/clients/by-phone?phone= — which client owns this number (used to match inbound WhatsApp)
+  if (url.pathname === "/api/clients/by-phone" && req.method === "GET") {
+    const c = getClientByPhone(url.searchParams.get("phone"));
+    if (!c) { json(res, 404, { error: "no client with that phone number" }); return; }
+    json(res, 200, { id: c.id, name: c.name, phone: c.phone });
     return;
   }
 

@@ -14,6 +14,7 @@ import { createGuard, listenHost, readBodyLimited } from "./security.mjs";
 import { describeRequest, contactForRequest } from "./documentContact.mjs";
 import { handleEmailRoute, PUBLIC_EMAIL_PATHS } from "./emailRoutes.mjs";
 import { startInboundPoller } from "./connectors/email.mjs";
+import { handleWhatsAppRoute, PUBLIC_WHATSAPP_PATHS } from "./whatsappRoutes.mjs";
 import { getClientMemory } from "./memory/clientMemory.mjs";
 import { runVatFilingPath } from "./scenario/vatFilingPath.mjs";
 import * as teamSystem from "./connectors/teamSystem.mjs";
@@ -107,7 +108,7 @@ function operatorAuthorized(req) {
 // optional login, hardening headers) — see security.mjs.
 const { guard } = createGuard({
   port: PORT,
-  publicPaths: [...PUBLIC_EMAIL_PATHS],
+  publicPaths: [...PUBLIC_EMAIL_PATHS, ...PUBLIC_WHATSAPP_PATHS],
   csp: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 });
 
@@ -139,6 +140,7 @@ async function handleRequest(req, res) {
   }
 
   if (await handleEmailRoute(req, res, url, readBody)) return;
+  if (await handleWhatsAppRoute(req, res, url, readBody)) return;
 
   // GET /api/client-memory/:clientId — Cortex memory for one client: run
   // history/trend, recurring problems, learned supplier rules, last run's actions.

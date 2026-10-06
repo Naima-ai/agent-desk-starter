@@ -134,7 +134,8 @@ export function requestOwnerApproval(clientId, action, payload, ladderCfg = {}) 
     onRemind: async (n) => {
       if (ticket.status !== "pending") return;
       ticket.remindersSent = n;
-      await wa.sendTemplate(getOwnerPhone(clientId), "approval_reminder", { action, ref: payload?.draftId ?? "n/a",});
+      const waResult = await wa.sendTemplate(getOwnerPhone(clientId), "approval_reminder", { action, ref: payload?.draftId ?? "n/a",});
+      if (waResult?.id) (ticket.waMessageIds ||= []).push(waResult.id); // lets whatsappInbound.mjs match a reply back to this gate
       emitLadderEvent({ kind: "gate", event: "reminder", gateId: ticket.id, clientId, action, n });
     },
     onEscalate: () => {
@@ -208,9 +209,16 @@ export async function collectDocument(manifest, clientId, expected, runtime = nu
     status: "pending", remindersSent: 0, escalated: false,
     createdAt: new Date().toISOString(),
   };
-  const ping = () => runtime?.sendOwner
-    ? runtime.sendOwner("request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period })
-    : wa.sendTemplate(getOwnerPhone(clientId), "request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period });
+  const ping = async () => {
+    const result = runtime?.sendOwner
+      ? await runtime.sendOwner("request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period })
+      : await wa.sendTemplate(getOwnerPhone(clientId), "request_document", { doc: `${expected.docType} ${expected.supplier}`, period: expected.period });
+    // Both paths return sendTemplate's result: the runtime path goes through the
+    // whatsapp.owner_employees tool, whose outputSchema is .passthrough(), so the
+    // Meta message id survives. Offline stub sends have no id — nothing to match.
+    if (result?.id) (request.waMessageIds ||= []).push(result.id); // lets whatsappInbound.mjs match a reply back to this request
+    return result;
+  };
   await ping();
   pendingDocumentRequests.set(requestId, request);
 
@@ -406,9 +414,13 @@ export async function handleCorrectionRequest(manifest, clientId, message, runti
     createdAt: new Date().toISOString(),
   };
   const vars = { rule: message.ruleId, period: message.period, detail: message.message };
-  const ping = () => runtime?.sendOwner
-    ? runtime.sendOwner("confirm_correction", vars)
-    : wa.sendTemplate(getOwnerPhone(clientId), "confirm_correction", vars);
+  const ping = async () => {
+    const result = runtime?.sendOwner
+      ? await runtime.sendOwner("confirm_correction", vars)
+      : await wa.sendTemplate(getOwnerPhone(clientId), "confirm_correction", vars);
+    if (result?.id) (correction.waMessageIds ||= []).push(result.id); // lets whatsappInbound.mjs match a reply back to this correction
+    return result;
+  };
   await ping();
   pendingCorrections.set(correctionId, correction);
   emitLadderEvent({ kind: "correction", event: "opened", correctionId, clientId, ruleId: message.ruleId });

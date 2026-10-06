@@ -237,6 +237,16 @@ export function getClientByEmail(email) {
   const emailOf = (c) => (c.email || `amministrazione@${c.id.replace(/_/g, "-")}.example`).toLowerCase(); // custom clients saved before this field existed
   return e ? clients.find((c) => emailOf(c) === e) : undefined;
 }
+// Digits only, so "+39 333 1234567", "+393331234567" and "0039..." all
+// compare equal regardless of how the phone was originally typed in.
+function digitsOf(phone) { return String(phone || "").replace(/[^\d]/g, ""); }
+export function getClientByPhone(phone) {
+  const p = digitsOf(phone);
+  // Unlike email, there is no synthesized default — most fixture clients have
+  // no phone on file until one is set via updateClientContact (the "save to
+  // client" checkbox on the WhatsApp contact form) or at client creation.
+  return p ? clients.find((c) => c.phone && digitsOf(c.phone) === p) : undefined;
+}
 export function listClients() {
   return clients.map((c) => ({ id: c.id, name: c.name, regime: c.regime, ateco: c.ateco, piva: c.piva, period: c.period, lineCount: c.lines.length, email: c.email, phone: c.phone }));
 }
