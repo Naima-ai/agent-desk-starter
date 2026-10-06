@@ -134,8 +134,7 @@ export function requestOwnerApproval(clientId, action, payload, ladderCfg = {}) 
     onRemind: async (n) => {
       if (ticket.status !== "pending") return;
       ticket.remindersSent = n;
-      const waResult = await wa.sendTemplate(getOwnerPhone(clientId), "approval_reminder", { action, ref: payload?.draftId ?? "n/a",});
-      if (waResult?.id) (ticket.waMessageIds ||= []).push(waResult.id); // lets whatsappInbound.mjs match a reply back to this gate
+      await wa.sendTemplate(getOwnerPhone(clientId), "approval_reminder", { action, ref: payload?.draftId ?? "n/a",});
       emitLadderEvent({ kind: "gate", event: "reminder", gateId: ticket.id, clientId, action, n });
     },
     onEscalate: () => {
