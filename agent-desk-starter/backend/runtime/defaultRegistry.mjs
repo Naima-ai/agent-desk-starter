@@ -1,0 +1,283 @@
+import { z } from "zod";
+import { A2AMessageSchema } from "../../contracts/a2aSchema.mjs";
+import { RoutingResultSchema } from "../../contracts/routingSchema.mjs";
+import { prepareSubmission } from "../connectors/adePortal.mjs";
+import { movements } from "../connectors/bankFeed.mock.mjs";
+import { draftInvoice } from "../connectors/fattureInCloudDraft.stub.mjs";
+import { readSdiInbox } from "../connectors/sdiInbox.stub.mjs";
+import { readMasterData, readPriorPeriod, readVatBatch } from "../connectors/teamSystem.mjs";
+import { sendTemplate } from "../connectors/whatsapp.mjs";
+import { getOwnerPhone } from "../clientDirectory.mjs";
+import { handleCorrectionRequest, handleInstructionFromStudio } from "../lAmministrativo.mjs";
+import { getRoster } from "../rosterStore.mjs";
+import { route } from "../smistatore.mjs";
+import { AgentRegistry } from "./agentRegistry.mjs";
+import { defaultRoutingTaskStore } from "./routingTaskStore.mjs";
+import { ToolRegistry } from "./toolRegistry.mjs";
+
+const BatchSchema = z.object({
+  period: z.string().min(1),
+  client: z.string().min(1),
+  lines: z.array(z.unknown()),
+}).passthrough();
+
+const ClientReadInputSchema = z.object({
+  clientId: z.string().min(1),
+  period: z.string().min(1).optional(),
+}).strict();
+
+const PriorPeriodSchema = z.object({
+  period: z.string().nullable(),
+  client: z.string().min(1),
+  lines: z.array(z.unknown()),
+}).passthrough();
+
+const PrepareInputSchema = z.object({ batch: BatchSchema }).strict();
+const PrepareOutputSchema = z.object({
+  prepared: z.literal(true),
+  period: z.string(),
+  lines: z.number().int().nonnegative(),
+  protocolDraft: z.string(),
+  live: z.boolean(),
+  note: z.string(),
+}).strict();
+
+const InstructionInputSchema = z.object({
+  message: z.object({
+    instruction: z.string().min(1),
+    due: z.string().optional(),
+  }).strict(),
+}).strict();
+
+const CorrectionInputSchema = z.object({
+  message: z.object({
+    ruleId: z.string().min(1),
+    message: z.string().min(1),
+    period: z.string().min(1),
+  }).strict(),
+}).strict();
+
+const BankMovementSchema = z.object({
+  date: z.string(),
+  amount: z.number(),
+  desc: z.string(),
+}).passthrough();
+
+const SdiDocumentSchema = z.object({
+  supplier: z.string(),
+  period: z.string(),
+  sdiId: z.string(),
+}).passthrough();
+
+const WhatsAppInputSchema = z.object({
+  clientId: z.string().min(1),
+  to: z.string().min(1),
+  template: z.string().min(1),
+  vars: z.record(z.unknown()).default({}),
+}).strict();
+
+const DraftInvoiceInputSchema = z.object({
+  clientId: z.string().min(1),
+  invoiceData: z.record(z.unknown()),
+}).strict();
+
+const DraftInvoiceOutputSchema = z.object({
+  draftId: z.string().min(1),
+  clientId: z.string().min(1),
+  status: z.literal("draft"),
+}).passthrough();
+
+const PersistRoutingInputSchema = z.object({
+  sourceMessageId: z.string().min(1),
+  result: RoutingResultSchema,
+}).strict();
+
+const PersistRoutingOutputSchema = z.object({
+  persisted: z.literal(true),
+  duplicate: z.boolean(),
+  sourceMessageId: z.string().min(1),
+}).strict();
+
+export const defaultToolRegistry = new ToolRegistry()
+  .register({
+    id: "board.create_task",
+    action: "create_routing_task",
+    risk: "write",
+    inputSchema: PersistRoutingInputSchema,
+    outputSchema: PersistRoutingOutputSchema,
+    clientScopePaths: ["result.client"],
+    locations: ["studio_edge"],
+    idempotent: true,
+    execute: (input) => defaultRoutingTaskStore.persist(input),
+  })
+  .register({
+    id: "escalation.ladder",
+    action: "persist_routing_escalation",
+    risk: "write",
+    inputSchema: PersistRoutingInputSchema,
+    outputSchema: PersistRoutingOutputSchema,
+    clientScopePaths: ["result.client"],
+    locations: ["studio_edge"],
+    idempotent: true,
+    execute: (input) => defaultRoutingTaskStore.persist(input),
+  })
+  .register({
+    id: "teamsystem.read_vat_batch",
+    action: "read_vat_batch",
+    risk: "read",
+    inputSchema: ClientReadInputSchema,
+    outputSchema: BatchSchema,
+    clientScopePaths: ["clientId"],
+    locations: ["studio_edge"],
+    idempotent: true,
+    execute: ({ clientId, period }) => readVatBatch(clientId, period),
+  })
+  .register({
+    id: "ledger.prior_period_compare",
+    action: "read_prior_period",
+    risk: "read",
+    inputSchema: z.object({ clientId: z.string().min(1) }).strict(),
+    outputSchema: PriorPeriodSchema,
+    clientScopePaths: ["clientId"],
+    locations: ["studio_edge"],
+    idempotent: true,
+    execute: ({ clientId }) => readPriorPeriod(clientId),
+  })
+  .register({
+    id: "batch.reassemble",
+    action: "reassemble_batch",
+    risk: "read",
+    inputSchema: z.object({ batch: BatchSchema, additions: z.array(z.unknown()).default([]) }).strict(),
+    outputSchema: BatchSchema,
+    clientScopePaths: ["batch.client"],
+    locations: ["studio_edge"],
+    idempotent: true,
+    execute: ({ batch, additions }) => ({ ...batch, lines: [...batch.lines, ...additions] }),
+  })
+  .register({
+    id: "ade.prepare_only",
+    action: "prepare_submission",
+    risk: "authority",
+    inputSchema: PrepareInputSchema,
+    outputSchema: PrepareOutputSchema,
+    clientScopePaths: ["batch.client"],
+    locations: ["studio_edge"],
+    idempotent: true,
+    execute: ({ batch }) => prepareSubmission(batch),
+  })
+  .register({
+    id: "bankfeed.read",
+    action: "read_bankfeed",
+    risk: "read",
+    inputSchema: z.object({ clientId: z.string().min(1) }).strict(),
+    outputSchema: z.array(BankMovementSchema),
+    clientScopePaths: ["clientId"],
+    locations: ["client_side"],
+    idempotent: true,
+    execute: () => movements(),
+  })
+  .register({
+    id: "sdi.inbox",
+    action: "read_sdi_inbox",
+    risk: "read",
+    inputSchema: z.object({ clientId: z.string().min(1) }).strict(),
+    outputSchema: z.array(SdiDocumentSchema),
+    clientScopePaths: ["clientId"],
+    locations: ["client_side"],
+    idempotent: true,
+    execute: ({ clientId }) => readSdiInbox(clientId),
+  })
+  .register({
+    id: "fattureincloud.draft",
+    action: "invoice",
+    risk: "write",
+    inputSchema: DraftInvoiceInputSchema,
+    outputSchema: DraftInvoiceOutputSchema,
+    clientScopePaths: ["clientId"],
+    locations: ["client_side"],
+    idempotent: false,
+    execute: ({ clientId, invoiceData }) => draftInvoice(clientId, invoiceData),
+  })
+  .register({
+    id: "whatsapp.owner_employees",
+    // Domain action and transport risk stay separate: the manifest gate names
+    // generic external sends, while this constrained template requests a doc.
+    action: "request_document",
+    risk: "external_send",
+    inputSchema: WhatsAppInputSchema,
+    outputSchema: z.object({ ok: z.boolean() }).passthrough(),
+    clientScopePaths: ["clientId"],
+    locations: ["client_side"],
+    idempotent: false,
+    execute: ({ to, template, vars }) => sendTemplate(to, template, vars),
+  });
+
+// Guarded capabilities handed to L'Amministrativo's business code for one bounded run.
+function administrativoRuntime(ctx) {
+  return {
+    movements: () => ctx.tools.invoke("bankfeed.read", { clientId: ctx.identity.clientId }),
+    readInbox: () => ctx.tools.invoke("sdi.inbox", { clientId: ctx.identity.clientId }),
+    // The owner's number on file in TeamSystem; the literal "owner" only if none is recorded yet.
+    sendOwner: async (template, vars) => ctx.tools.invoke("whatsapp.owner_employees", {
+      clientId: ctx.identity.clientId, to: process.env.WHATSAPP_TEST_RECIPIENT || (await readMasterData(ctx.identity.clientId)).phone || getOwnerPhone(ctx.identity.clientId), template, vars,
+    }),
+    toStudio: (message) => {
+      const { type, ...payload } = message;
+      return ctx.messages.emit(type, payload, { to: "lo_smistatore" });
+    },
+    scheduleLadder: false,
+  };
+}
+
+export const defaultAgentRegistry = new AgentRegistry()
+  .register({
+    seat: "lo_smistatore",
+    operations: {
+      route_message: {
+        inputSchema: z.object({ message: A2AMessageSchema }).strict(),
+        tools: ["board.create_task", "escalation.ladder"],
+        handler: async ({ message }, ctx) => {
+          const result = route(message, getRoster());
+          const toolId = result.kind === "routed_task" ? "board.create_task" : "escalation.ladder";
+          await ctx.tools.invoke(toolId, { sourceMessageId: message.id, result });
+          return { artifacts: [result] };
+        },
+      },
+    },
+  })
+  .register({
+    seat: "l_addetto_iva",
+    operations: {
+      prepare_submission: {
+        inputSchema: PrepareInputSchema,
+        tools: ["ade.prepare_only"],
+        handler: async (input, ctx) => {
+          const prepared = await ctx.tools.invoke("ade.prepare_only", input);
+          return { artifacts: [prepared] };
+        },
+      },
+    },
+  })
+  .register({
+    seat: "l_amministrativo",
+    operations: {
+      handle_instruction: {
+        inputSchema: InstructionInputSchema,
+        tools: ["bankfeed.read", "sdi.inbox", "whatsapp.owner_employees"],
+        handler: async (input, ctx) => {
+          const result = await handleInstructionFromStudio(ctx.manifest, ctx.identity.clientId, input.message, administrativoRuntime(ctx));
+          const { ack, a2a, ...artifact } = result;
+          return { artifacts: [artifact] };
+        },
+      },
+      handle_correction: {
+        inputSchema: CorrectionInputSchema,
+        tools: ["whatsapp.owner_employees"],
+        handler: async (input, ctx) => {
+          const result = await handleCorrectionRequest(ctx.manifest, ctx.identity.clientId, input.message, administrativoRuntime(ctx));
+          const { ack, ...artifact } = result;
+          return { artifacts: [artifact] };
+        },
+      },
+    },
+  });

@@ -37,16 +37,30 @@ other file has to agree with them — they're the shared rulebook.
 | File | What it's for |
 |---|---|
 | `manifestSchema.mjs` | Defines what a valid "agent description" must contain: what it's allowed to do, what it must refuse, when it must stop and ask a human, how it's paid. If a description is missing something required, this rejects it. |
-| `a2aSchema.mjs` | Defines the 8 message types agents are allowed to send each other (e.g. "a document was delivered," "something is missing," "here is my answer"). No free-form chatting between agents — only these 8 shapes, each one signed so it can be trusted. |
+| `a2aSchema.mjs` | Defines the 9 message types agents are allowed to send each other (e.g. "a document was delivered," "something is missing," "here is my answer"). No free-form chatting between agents — only these 9 shapes. The current signature is still a development stub pending A2A v2. |
+| `runtimeSchema.mjs` | Defines the strict request, context, error, and result shapes accepted and returned by the native agent engine. |
 | `seats/*.job.txt` + `*.json` | One pair per agent: the plain-language job description (`.job.txt`) and the compiled, structured version of it (`.json`) that the engine actually runs. |
 
 ## backend/runtime/ — the engine that runs an agent
 
 | File | What it's for |
 |---|---|
-| `openclaw.mjs` | Takes one compiled agent and actually runs it — loads its rules, gives it its allowed tools, lets it act. Without this, an agent description is just a document; this is what brings it to life. |
-| `guardrails.mjs` | Double-checks every action an agent tries to take against its "must never do this" list and its "must ask a human first" rule — enforced here in code, not left to the AI to remember on its own. |
-| `bus.mjs` | The mailroom: carries the 8 typed messages between agents, reliably, so a message isn't lost if something restarts. |
+| `agentEngine.mjs` | Native bounded runtime: validates a run, loads the active manifest, resolves the agent operation, applies limits, executes it, validates artifacts/messages, and returns a structured result. A future OpenClaw adapter can sit behind the same interface. |
+| `agentRegistry.mjs` | Maps a seat and operation to a typed handler adapter and an operation-specific tool capability set. Unknown seats and operations fail closed. |
+| `toolRegistry.mjs` | Maps manifest tool IDs to typed implementations and risk/action/location/client metadata. Agent handlers never receive unrestricted connector modules. |
+| `executionContext.mjs` | Gives each run immutable identity, guarded tool invocation, typed A2A emission, cancellation, and bounded tool/message counts. |
+| `guardrails.mjs` | Central deny-first authorization for every runtime tool call: allowlists, immutable and manifest refusals, location/client/memory boundaries, normalized gates, and exact one-use approvals. |
+| `systemPolicy.mjs` | Reviewed non-overridable refusal and system-gate policy, independent of generated manifests. |
+| `approvalStore.mjs` | Durable approval lifecycle (`pending → approved → consumed`, denied, or expired), bound to hashes of the exact run/client/tool/action/arguments. |
+| `auditLog.mjs` | Append-only decision audit adapters. The default JSONL log contains identities, hashes, outcomes, and policy references—never tool payloads or secrets. |
+| `a2aConsumers.mjs` | Owns the single durable consumer path for Lo Smistatore and L'Amministrativo, invokes their runtime operations, and publishes compatible UI telemetry. |
+| `routingTaskStore.mjs` | Idempotently persists dispatcher outcomes before an inbound delivery is acknowledged. |
+| Runtime startup check | Validates every business tool advertised by enabled-seat manifests and fails startup on missing registry mappings or operation/manifest mismatches. |
+| `messaging/a2aBus.mjs` | Verified, transport-neutral A2A facade: admission deduplication, durable publish, idempotent completion, retries, acknowledgment, and dead-letter handling. |
+| `messaging/inMemoryTransport.mjs` | Deterministic offline/test transport with ack/nack, recovery, concurrency protection, retention bounds, and shared-state restart simulation. |
+| `messaging/redisStreamsTransport.mjs` | Production Redis Streams adapter using consumer groups, `XACK`, `XAUTOCLAIM`, bounded streams, and a dead-letter stream. |
+| `messaging/uiBus.mjs` | Bounded in-memory UI/SSE telemetry, isolated from durable delivery failures. |
+| `backend/bus.mjs` | UI-only compatibility facade. It rejects the `a2a` channel so domain messages cannot bypass durable admission. |
 | `modelGateway.mjs` | The one place that knows how to ask an AI model a question and get a structured answer back. A small, local model handles most requests; a bigger model steps in as backup. Every other file that needs "AI thinking" calls through here, instead of each having its own way of talking to a model. |
 
 ## backend/ — the agent brains
@@ -82,8 +96,9 @@ other file has to agree with them — they're the shared rulebook.
 
 Plays the whole story from start to finish, in order: batch arrives → checked →
 low-confidence lines resolved → missing item chased through the client → rule
-saved → batch re-assembled → human gate → filed. Useful both as a live demo and as
-a plain description of how the pieces are meant to connect.
+saved → batch re-assembled → human gate → filed. The missing-document handoff is
+admitted to the durable bus and waits for the correlated runtime-consumer
+outcome; the scenario does not execute the same instruction directly.
 
 ## frontend/ — the 5 screens
 

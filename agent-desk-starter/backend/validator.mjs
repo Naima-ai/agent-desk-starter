@@ -43,8 +43,10 @@ function checkPriorPeriod(lines, priorPeriod) {
  * @param {Array}  [opts.receivedDocs] - documents actually on file this period.
  * @param {object} [opts.priorPeriod]  - the same client's prior-period batch.
  * @param {Array}  [opts.taxonomy]     - the client's chart of accounts (code -> expected rate).
+ * @param {object} [opts.vatGroup]     - the client's VAT-Group membership info, if any (checkVatGroupIdentity).
+ * @param {Array}  [opts.formatAnomalies] - FMT-01 findings from the ingestion stage (raw payload didn't parse) — a different pipeline stage (Rulebook 5.1), surfaced here rather than in vatRules.mjs.
  */
-export function validateBatch(batch, { receivedDocs = [], priorPeriod = null, taxonomy = [] } = {}) {
+export function validateBatch(batch, { receivedDocs = [], priorPeriod = null, taxonomy = [], vatGroup = null, formatAnomalies = [] } = {}) {
   const tail = batch.lines.filter((l) => (l.confidence ?? 0) < THRESHOLD || !l.account);
 
   // NOTE: also not one of the 21 catalogued rules — the rulebook's STR-02 is
@@ -59,9 +61,9 @@ export function validateBatch(batch, { receivedDocs = [], priorPeriod = null, ta
     .map((e) => ({ ruleId: "DOC-MISSING", severity: "Blocking", kind: "item_missing", expected: `${e.docType} ${e.supplier}`, period: e.period }));
 
   const priorPeriodAnomalies = checkPriorPeriod(batch.lines, priorPeriod);
-  const vatRuleAnomalies = runVatRules(batch.lines, taxonomy);
+  const vatRuleAnomalies = runVatRules(batch.lines, taxonomy, { vatGroup });
 
-  const anomalies = [...missing, ...priorPeriodAnomalies, ...vatRuleAnomalies];
+  const anomalies = [...formatAnomalies, ...missing, ...priorPeriodAnomalies, ...vatRuleAnomalies];
   const blocking = anomalies.filter((a) => a.severity === "Blocking");
   const ok = tail.length === 0 && anomalies.length === 0;
 

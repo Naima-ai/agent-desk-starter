@@ -30,6 +30,13 @@
 // escalation_requested go to a human/studio_lead queue — there's no seat
 // yet whose job is "answer client questions", so this is a deliberate
 // backstop, not a real owner.
+//
+// l_addetto_iva -> lo_smistatore: correction_request (a VAT-rule anomaly —
+// bad rate, bad P.IVA, missing evidence, ...) is routed to l_amministrativo,
+// the client-side agent who actually delivers the correction request to
+// the client. Every client has exactly one l_amministrativo instance in
+// this demo (there's no per-client roster split), so its `clients` below is
+// "*" rather than a hardcoded couple of names.
 // -------------------------------------------------------------------
 
 export const rosterFixture = [
@@ -38,8 +45,9 @@ export const rosterFixture = [
     // instruction_from_studio kept here for completeness (see note above) —
     // never actually exercised today, since that direction is always
     // pre-addressed straight to l_amministrativo and skips lo_smistatore.
-    competence: ["instruction_from_studio"],
-    clients: ["rossi_srl", "bianchi_snc"],
+    // correction_request IS actually exercised (see note above).
+    competence: ["instruction_from_studio", "correction_request"],
+    clients: ["*"],
     available: true,
     tier: 0,
   },
@@ -65,6 +73,7 @@ export const rosterFixture = [
       "pack_delivered", "document_delivered", "item_missing",
       "question_for_studio", "instruction_from_studio",
       "answer_with_evidence", "escalation_requested", "acknowledgment",
+      "correction_request",
     ],
     clients: ["*"],
     available: true,

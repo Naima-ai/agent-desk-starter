@@ -1,6 +1,10 @@
 // backend/memory/evidenceStore.mjs — immutable, append-only. "What proves."
 // Persists to data/evidence.jsonl so evidence survives a restart — the in-memory
 // array alone (the original starter behaviour) forgot everything on every restart.
+// GOTCHA: this also means every `node` process reading data/ shares the SAME
+// history, including test runs. `npm test`'s `pretest` script clears data/
+// first for exactly this reason — a test asserting "nothing exists yet for
+// this period" WILL fail on a second run otherwise, once persistence is real.
 // >>> TODO (real): back this with a real append-only store (object storage + a
 //     database index, per-client partitioned) instead of a local file.
 import { createHash } from "node:crypto";

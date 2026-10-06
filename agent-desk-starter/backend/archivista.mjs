@@ -14,22 +14,34 @@ const CONFIRMED_CONFIDENCE = 0.98;
 const DECAY_AFTER_DAYS = 90;
 const DECAY_STEP = 0.1;
 
+// "Never store without evidence" (l_archivista.job.txt) is a hard
+// constraint, not a suggestion — found unenforced: proposeRule() and
+// confirmRule() both happily stored a rule with evidenceId left undefined.
+function assertHasEvidence(evidenceId, action) {
+  if (!evidenceId) {
+    throw new Error(`REFUSED: l_archivista will not ${action} without evidence — hard block, not a suggestion.`);
+  }
+}
+
 /** Propose a rule from a single observation. Recorded immediately, but marked
  *  "shadow" — not confident enough to auto-apply until a human confirms it. */
 export function proposeRule({ key, kind, scope, value, source, evidenceId }) {
+  assertHasEvidence(evidenceId, "propose a rule");
   return knowledge.upsert({ key, kind, scope, value, source, evidenceId, status: "shadow", confidence: SHADOW_CONFIDENCE });
 }
 
 /** A human confirms the fix at the gate: promote the rule to confirmed and trusted. */
 export function confirmRule(key, confirmedBy, evidenceId) {
   const existing = knowledge.get(key);
+  const resolvedEvidenceId = evidenceId ?? existing?.evidenceId;
+  assertHasEvidence(resolvedEvidenceId, "confirm a rule");
   return knowledge.upsert({
     ...(existing || {}),
     key,
     status: "confirmed",
     confidence: CONFIRMED_CONFIDENCE,
     confirmedBy,
-    evidenceId: evidenceId ?? existing?.evidenceId,
+    evidenceId: resolvedEvidenceId,
   });
 }
 

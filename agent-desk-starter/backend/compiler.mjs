@@ -1,6 +1,7 @@
 // backend/compiler.mjs
 // The Job Card Compiler: NL job description -> validated manifest -> OpenClaw skill file.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { validateManifest } from "../contracts/manifestSchema.mjs";
@@ -8,6 +9,52 @@ import { askModel } from "./modelGateway.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seatsDir = join(here, "..", "contracts", "seats");
+
+// The manifest actually driving each seat's behavior right now — until
+// OpenClaw exists as a real runtime that LOADS a compiled manifest and
+// executes an agent from it, this in-memory cache is the closest thing:
+// compiling a seat (Agent page, or POST /api/compile/:seat) updates it, and
+// the few call sites that already have a manifest-consuming hook (today:
+// just lAmministrativo.mjs's skillEnabled()/assertAllowed()) read from here
+// instead of a fixed static import — so compiling something the SAME
+// server session's next real run actually reflects it. Resets to the seed
+// manifests on restart, same as this server's other in-memory state.
+const activeManifests = new Map(); // seatId -> validated manifest
+
+function loadSeedManifestSync(seatId) {
+  const raw = readFileSync(join(seatsDir, `${seatId}.json`), "utf8");
+  return validateManifest(JSON.parse(raw));
+}
+
+/** A model-written manifest is NOT trusted to define what a seat can do. A 3B
+ *  model asked to "compile" a job description returns a generic VAT-batch
+ *  template (wrong tools, location, skills, memory, schedule, gate...) whatever
+ *  the seat; installed as the live manifest it either makes the runtime refuse
+ *  every run (RUNTIME_CONFIGURATION_INVALID) or silently switches off the
+ *  seat's skills. So the vetted seed manifest stays authoritative for every
+ *  capability field, and the compile can only make a seat STRICTER: refusals
+ *  the job text adds are kept (union). Every field the model tried to change
+ *  is reported in  so nothing is ignored silently. */
+export function reconcileWithSeed(seatId, manifest) {
+  const seed = loadSeedManifestSync(seatId);
+  const warnings = [];
+  const ignored = Object.keys(seed).filter((k) => k !== "refuses" && k !== "seat" && JSON.stringify(seed[k]) !== JSON.stringify(manifest[k]));
+  if (ignored.length) warnings.push(`Ignored the model's changes to: ${ignored.join(", ")} (the vetted seat definition is kept)`);
+  const droppedRefuses = seed.refuses.filter((x) => !manifest.refuses.includes(x));
+  if (droppedRefuses.length) warnings.push(`The model dropped hard refusals; restored: ${droppedRefuses.join(", ")}`);
+  const addedRefuses = manifest.refuses.filter((x) => !seed.refuses.includes(x));
+  if (addedRefuses.length) warnings.push(`Added refusals from the job text: ${addedRefuses.join(", ")}`);
+  return { manifest: validateManifest({ ...seed, refuses: [...seed.refuses, ...addedRefuses] }), warnings };
+}
+
+/** Synchronous on purpose — assertAllowed() is a hot, synchronous hard-block
+ *  check (tests call it as `assert.throws(() => fn())`), and making the
+ *  active-manifest lookup async would force that whole call chain async
+ *  too, for no real benefit once the manifest is already cached. */
+export function getActiveManifest(seatId) {
+  if (!activeManifests.has(seatId)) activeManifests.set(seatId, loadSeedManifestSync(seatId));
+  return activeManifests.get(seatId);
+}
 
 const COMPILER_SYSTEM_PROMPT = `Sei il Chief of Staff (Il Capogabinetto) del sistema Loop Agent Desk per commercialisti italiani.
 Il tuo compito è analizzare la Job Description di un agente (scritta in linguaggio naturale italiano) 
@@ -52,8 +99,16 @@ export async function parseJobTextToManifest(jobText, fallbackSeatId = null) {
       }
 
       if (parsed) {
-        // If parsing natural language missed seat name, preserve the target seatId
-        if (!parsed.seat && fallbackSeatId) {
+        // The caller always knows which seat it's compiling (both call sites
+        // below pass it) — that's more authoritative than whatever the model
+        // says, so it always wins, not just when the model left `seat` blank.
+        // Found for real: modelGateway.mjs's OFFLINE fallback (no local SLM,
+        // no cloud key — the default in this dev environment) always returns
+        // a hardcoded manifest shaped for "l_addetto_iva" regardless of which
+        // seat asked, so compiling e.g. "l_amministrativo" silently returned
+        // l_addetto_iva's manifest instead — `!parsed.seat` never caught it
+        // because the fallback DOES set a (wrong) seat.
+        if (fallbackSeatId) {
           parsed.seat = fallbackSeatId;
         }
         return validateManifest(parsed);
@@ -83,24 +138,26 @@ export async function parseJobToManifest(seatId) {
 // STEP 2: validate against the contract (this is the guardrail gate).
 // STEP 3: emit an OpenClaw skill file (SOUL.md-style) with hard blocks.
 export async function compile(seatId) {
-  const manifest = await parseJobToManifest(seatId);
+  const { manifest, warnings } = reconcileWithSeed(seatId, await parseJobToManifest(seatId));
   const job = await readFile(join(seatsDir, `${seatId}.job.txt`), "utf8").catch(() => "");
   const skill = emitSkill(manifest, job);
   const outDir = join(here, "..", "build", "skills");
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, `${seatId}.md`), skill, "utf8");
-  return { manifest, skill };
+  activeManifests.set(seatId, manifest); // this is now what the real pipeline reads for this seat
+  return { manifest, skill, warnings };
 }
 
 // Used by the frontend's "write the job in Italian" box.
 // Parses custom job text via SLM/LLM into a live manifest validated by ManifestSchema.
 export async function compileWithJobText(seatId, jobText) {
-  const manifest = await parseJobTextToManifest(jobText, seatId);
+  const { manifest, warnings } = reconcileWithSeed(seatId, await parseJobTextToManifest(jobText, seatId));
   const skill = emitSkill(manifest, jobText || "");
   const outDir = join(here, "..", "build", "skills");
   await mkdir(outDir, { recursive: true });
   await writeFile(join(outDir, `${seatId}.md`), skill, "utf8");
-  return { manifest, skill, usedCustomJobText: Boolean(jobText) };
+  activeManifests.set(seatId, manifest); // this is now what the real pipeline reads for this seat
+  return { manifest, skill, warnings, usedCustomJobText: Boolean(jobText) };
 }
 
 export function emitSkill(m, job) {
@@ -130,4 +187,4 @@ ${m.gate ? `\n## Human gate\n- ${m.gate}` : ""}
 `;
 }
 
-export default { compile, compileWithJobText, parseJobToManifest, parseJobTextToManifest, emitSkill };
+export default { compile, compileWithJobText, parseJobToManifest, parseJobTextToManifest, emitSkill, getActiveManifest };

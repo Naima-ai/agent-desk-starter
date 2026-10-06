@@ -15,6 +15,12 @@ export const MemoryScope = z.object({
   partition: z.string().optional(), // L'Amministrativo: scoped mirror of client L3
 });
 
+export const GatePolicySchema = z.object({
+  approver: z.enum(["owner", "studio_professional", "credential_owner"]),
+  actions: z.array(z.string().min(1)).min(1),
+  expiresInSeconds: z.number().int().positive().max(86_400).default(900),
+}).strict();
+
 export const ManifestSchema = z.object({
   seat: z.string().regex(/^[a-z0-9_]+$/),
   desk: z.string().optional(),
@@ -24,7 +30,9 @@ export const ManifestSchema = z.object({
   tools: z.array(z.string()).default([]),
   memory: MemoryScope,
   refuses: z.array(z.string()).default([]), // -> HARD runtime blocks
-  gate: z.string().optional(),
+  // String gates remain accepted while the seed manifests migrate. Runtime
+  // policy normalizes them and treats unknown syntax as approval-required.
+  gate: z.union([z.string(), GatePolicySchema]).optional(),
   schedule: z.string().optional(),
   artifact: z.string().optional(),
   unit: z.record(z.string(), z.union([z.string(), z.number()])).default({}),

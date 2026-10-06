@@ -2,31 +2,29 @@
  * modelGateway.mjs
  * 
  * Unified Model Gateway for Loop Agent Desk.
- * - Primary: Sovereign Edge SLM (Qwen via llama-cpp-python / local server)
- * - Secondary: Cloud Fallback (Kimi / Moonshot / OpenAI-compatible API)
+ * - Primary: Sovereign Edge SLM (Qwen via Ollama localhost:11434)
+ * - Secondary: Free Cloud Fallback (Google Gemini generateContent with Auth Key)
  * - Tertiary: Resilient heuristic fallback for offline development & tests
  */
 
 import { z } from 'zod';
 
-const LOCAL_SLM_URL = process.env.LOCAL_SLM_URL || 'http://localhost:8000/v1/chat/completions';
-const LOCAL_SLM_MODEL = process.env.LOCAL_SLM_MODEL || 'qwen3.5-4b';
+const LOCAL_SLM_URL = process.env.LOCAL_SLM_URL || 'http://localhost:11434/v1/chat/completions';
+const LOCAL_SLM_MODEL = process.env.LOCAL_SLM_MODEL || 'qwen2.5:3b';
 
-const FALLBACK_LLM_URL = process.env.FALLBACK_LLM_URL || 'https://api.moonshot.cn/v1/chat/completions';
-const FALLBACK_LLM_KEY = process.env.FALLBACK_LLM_KEY || process.env.OPENAI_API_KEY || '';
-const FALLBACK_LLM_MODEL = process.env.FALLBACK_LLM_MODEL || 'kimi-latest';
+const FALLBACK_LLM_URL = process.env.FALLBACK_LLM_URL || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent';
+// No hardcoded fallback key — a real, live-looking Gemini key was committed
+// here directly in source (now revoked/rotated, ask whoever owns the
+// Google AI Studio project). Credentials belong in .env (gitignored, see
+// backend/loadEnv.mjs) or a real environment variable, never a literal in
+// a file that's checked into git — that's permanent in history the moment
+// it's pushed, private repo or not.
+const FALLBACK_LLM_KEY = process.env.FALLBACK_LLM_KEY || process.env.GEMINI_API_KEY || '';
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.MODEL_GATEWAY_TIMEOUT_MS) || 6000;
+const DEFAULT_TIMEOUT_MS = Number(process.env.MODEL_GATEWAY_TIMEOUT_MS) || 20000;
 
 /**
  * Main inference function used by compiler.mjs, classifier.mjs, and other agents.
- * 
- * @param {Object} options
- * @param {string} options.prompt - The user input or payload prompt.
- * @param {string} [options.systemPrompt] - System instructions and role constraints.
- * @param {z.ZodSchema} [options.schema] - Optional Zod schema for structured output validation.
- * @param {number} [options.temperature=0.1] - Sampling temperature.
- * @returns {Promise<Object|string>} Validated parsed object or string response.
  */
 export async function askModel({
   prompt,
@@ -44,7 +42,7 @@ export async function askModel({
   }
   messages.push({ role: 'user', content: prompt });
 
-  // 1. Try Local Edge SLM (Qwen)
+  // 1. Try Local Edge SLM (Qwen via Ollama)
   try {
     const localResult = await callChatCompletion({
       url: LOCAL_SLM_URL,
@@ -56,55 +54,115 @@ export async function askModel({
     });
 
     if (localResult) {
+      console.log('>>> [GATEWAY] Tier 1 SUCCESS: Edge SLM responded');
       return parseOutput(localResult, schema);
     }
   } catch (err) {
-    // Local SLM offline, timed out, or unparseable JSON -> proceed to fallback
+    console.log('>>> [GATEWAY] Tier 1 (Edge SLM) bypassed:', err.message);
   }
 
-  // 2. Try Cloud Fallback (Kimi / OpenAI) if an API key is configured
+  // 2. Try Cloud Fallback (Gemini with Auth Key)
   if (FALLBACK_LLM_KEY) {
     try {
       const fallbackResult = await callChatCompletion({
         url: FALLBACK_LLM_URL,
-        model: FALLBACK_LLM_MODEL,
+        model: 'gemini-flash-latest',
         apiKey: FALLBACK_LLM_KEY,
         messages,
         temperature,
         schema,
-        timeoutMs: DEFAULT_TIMEOUT_MS * 2
+        timeoutMs: 15000
       });
 
       if (fallbackResult) {
+        console.log('>>> [GATEWAY] Tier 2 SUCCESS: Cloud Fallback (Gemini) responded');
         return parseOutput(fallbackResult, schema);
       }
     } catch (err) {
-      // Cloud fallback unavailable or failed schema
+      console.log('>>> [GATEWAY] Tier 2 (Cloud Fallback) failed:', err.message);
     }
   }
 
-  // 3. Resilient Offline Heuristic Fallback (avoids breaking server and UI)
+  // 3. Resilient Offline Heuristic Fallback
+  console.log('>>> [GATEWAY] Tier 3 ACTIVE: Using Deterministic Heuristic');
   return getOfflineFallback({ prompt, systemPrompt, schema });
 }
 
-/**
- * Executes an HTTP POST against an OpenAI-compatible /v1/chat/completions endpoint.
- */
-async function callChatCompletion({ url, model, apiKey, messages, temperature, schema, timeoutMs }) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
+export async function getGatewayStatus() {
+  // Tier 1 — is the local Ollama/Qwen server reachable AND does it have the model?
+  let edgeNote = null;
+  try {
+    const probeUrl = LOCAL_SLM_URL.replace(/\/v1\/chat\/completions\/?$/, '/v1/models');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    try {
+      const res = await fetch(probeUrl, { signal: controller.signal });
+      if (res.ok) {
+        // A reachable Ollama with no such model installed still fails every
+        // call with 404 "model not found" — only report the edge tier when
+        // the configured model is really there.
+        const body = await res.json().catch(() => ({}));
+        const installed = (body.data || []).map((m) => m.id);
+        const hasModel = installed.some((id) => id === LOCAL_SLM_MODEL || id === `${LOCAL_SLM_MODEL}:latest`);
+        if (hasModel) {
+          return { tier: 'edge', label: `Local SLM (${LOCAL_SLM_MODEL})`, model: LOCAL_SLM_MODEL };
+        }
+        edgeNote = `Ollama is running but model "${LOCAL_SLM_MODEL}" is not installed — run: ollama pull ${LOCAL_SLM_MODEL}`;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    // Ollama not running / unreachable — fall through to the next tier.
   }
 
-  const payload = {
-    model,
-    messages,
-    temperature,
-    max_tokens: 1500
-  };
+  // Tier 2 — no live edge model, but a cloud fallback key is configured.
+  if (FALLBACK_LLM_KEY) {
+    return { tier: 'cloud', label: 'Cloud Fallback (Gemini)', model: 'gemini-flash-latest', note: edgeNote };
+  }
 
-  if (schema) {
-    payload.response_format = { type: 'json_object' };
+  // Tier 3 — neither is available; askModel() would serve the deterministic
+  // offline heuristic for every call right now.
+  return { tier: 'offline', label: 'Offline Heuristic Fallback', model: null, note: edgeNote };
+}
+
+/**
+ * Executes an HTTP POST against an OpenAI/Ollama endpoint or native Gemini REST endpoint.
+ */
+async function callChatCompletion({ url, model, apiKey, messages, temperature, schema, timeoutMs }) {
+  const isGoogle = url.includes('generativelanguage.googleapis.com');
+  const headers = { 'Content-Type': 'application/json' };
+
+  let payload;
+
+  if (isGoogle) {
+    headers['X-goog-api-key'] = apiKey;
+
+    const fullPrompt = messages.map(m => `${m.role ? m.role.toUpperCase() : 'USER'}: ${m.content}`).join('\n\n');
+    payload = {
+      contents: [
+        {
+          parts: [{ text: fullPrompt }]
+        }
+      ],
+      generationConfig: {
+        temperature,
+        responseMimeType: schema ? 'application/json' : 'text/plain'
+      }
+    };
+  } else {
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+    payload = {
+      model,
+      messages,
+      temperature,
+      max_tokens: 1500
+    };
+    if (schema) {
+      payload.response_format = { type: 'json_object' };
+    }
   }
 
   const controller = new AbortController();
@@ -119,10 +177,17 @@ async function callChatCompletion({ url, model, apiKey, messages, temperature, s
     });
 
     if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.log(`>>> [GATEWAY] POST returned ${res.status}: ${errText}`);
       return null;
     }
 
     const data = await res.json();
+
+    if (isGoogle) {
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    }
+
     return data.choices?.[0]?.message?.content || null;
   } finally {
     clearTimeout(timer);
@@ -147,13 +212,11 @@ function parseOutput(rawContent, schema) {
 }
 
 /**
- * Provides deterministic structured fallback data when running offline without an active model server.
- * Handles callers with or without an explicit Zod schema.
+ * Provides deterministic structured fallback data when running offline.
  */
 function getOfflineFallback({ prompt, schema }) {
   const lower = (prompt || '').toLowerCase();
 
-  // Smart heuristic for compiler.mjs manifest generation
   if (lower.includes('job description') || lower.includes('manifesto json') || lower.includes('manifest')) {
     const fallbackManifest = {
       seat: "l_addetto_iva",
@@ -171,13 +234,12 @@ function getOfflineFallback({ prompt, schema }) {
     return schema ? schema.parse(fallbackManifest) : JSON.stringify(fallbackManifest);
   }
 
-  // Smart heuristic for classifier.mjs COA lookup
   if (lower.includes('classifica') || lower.includes('fornitore:') || lower.includes('conto')) {
     let account = "60.10";
     let confidence = 0.90;
 
     if (lower.includes('hotel') || lower.includes('alberg') || lower.includes('trasfert') || lower.includes('soggiorno')) {
-      account = "60.15";
+      account = "60.30";
       confidence = 0.94;
     } else if (lower.includes('enel') || lower.includes('utenza') || lower.includes('luce')) {
       account = "60.20";
@@ -199,4 +261,4 @@ function getOfflineFallback({ prompt, schema }) {
   return schema ? { response: defaultText } : defaultText;
 }
 
-export default { askModel };
+export default { askModel, getGatewayStatus };

@@ -1,0 +1,18 @@
+{
+  "name": "teamsystem-firm-mock",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mock of the studio's IT system (TeamSystem gestionale + Fatture in Cloud) — 11 clients (one with a real 189-account Odoo l10n_it chart), VAT batches, FatturaPA-shaped XML. Stands in until a real connector exists.",
+  "scripts": {
+    "start": "node backend/server.mjs",
+    "check": "node --check backend/server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@babel/standalone": "^7.29.9",
+    "pdf-parse": "^2.4.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

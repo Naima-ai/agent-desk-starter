@@ -1,0 +1,16 @@
+node_modules
+tests
+scripts
+sample-documents
+*.md
+.env
+.env.*
+.git
+Dockerfile
+.dockerignore
+npm-debug.log*
+backend/data/custom-clients.json
+backend/data/edits.json
+backend/data/workflow-state.json
+backend/attachments/*
+!backend/attachments/contract-ref-L1.pdf

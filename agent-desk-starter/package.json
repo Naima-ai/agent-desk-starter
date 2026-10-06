@@ -7,9 +7,17 @@
   "scripts": {
     "start": "node --env-file=.env backend/server.mjs",
     "check": "node --check backend/server.mjs",
-    "test": "node --test"
+    "pretest": "node --eval \"import('node:fs').then(({rmSync})=>rmSync('data',{recursive:true,force:true}))\"",
+    "test": "node --test",
+    "test:redis": "node --test tests/redisStreamsTransport.test.mjs"
   },
   "dependencies": {
+    "imapflow": "^1.7.8",
+    "mailparser": "^3.9.33",
+    "nodemailer": "^10.0.14",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "redis": "^5.12.1",
     "zod": "^3.25.76"
   }
 }

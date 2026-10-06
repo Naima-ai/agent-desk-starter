@@ -11,28 +11,19 @@
 // (Same "pure first, wire the bus later" order lAmministrativo.mjs's
 // skills followed before server.mjs's /api/test-skill sandbox existed.)
 //
-// >>> TODO (real): once guardrails.mjs exists, delete assertAllowed()
-//     below and let it wrap route() generically instead — don't let
-//     both exist at once, that's how a refusal quietly stops being
-//     enforced.
 import { A2AMessageSchema } from "../contracts/a2aSchema.mjs";
 import { validateRoster } from "../contracts/rosterSchema.mjs";
 import { RoutedTaskSchema, EscalationEventSchema } from "../contracts/routingSchema.mjs";
+import { assertStaticActionAllowed } from "./runtime/systemPolicy.mjs";
 
 const SEAT = "lo_smistatore";
-
-// Mirrors contracts/seats/lo_smistatore.json's `refuses` — same pattern
-// lAmministrativo.mjs uses for its own REFUSES constant.
-const REFUSES = ["answer_client_directly", "rank_people", "route_by_measured_behaviour"];
 
 // ---------------------------------------------------------------------------
 // Hard blocks. Enforced at the call layer, in code, on every call — not a
 // prompt hint the model could talk itself around.
 // ---------------------------------------------------------------------------
 function assertAllowed(action) {
-  if (REFUSES.includes(action)) {
-    throw new Error(`REFUSED: ${SEAT} will not perform "${action}" — hard block, not a suggestion.`);
-  }
+  assertStaticActionAllowed({ seat: SEAT, action });
 }
 
 // These exist so the refusal is something you can call and watch fail, not

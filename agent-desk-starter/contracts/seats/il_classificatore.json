@@ -7,7 +7,7 @@
     "fattureincloud.read_document",
     "coa.lookup",
     "fattureincloud.post_line",
-    "a2a.handoff:il_riconciliatore"
+    "a2a.handoff:l_archivista"
   ],
   "memory": { "read": [1, 2, 3], "write": [3] },
   "refuses": ["post_below_confidence", "alter_chart_conventions", "invent_accounts"],

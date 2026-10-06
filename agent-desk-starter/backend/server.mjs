@@ -1,95 +1,244 @@
 // backend/server.mjs — zero-framework HTTP + Server-Sent Events.
 // Serves the frontend, streams bus events, exposes compile + run + gate endpoints.
+import "./loadEnv.mjs"; // must be first — connector modules read process.env at import time
 import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join, extname } from "node:path";
+import { dirname, join, extname, resolve, sep } from "node:path";
 import { subscribe, history, publish } from "./bus.mjs";
 import { makeMessage } from "../contracts/a2aSchema.mjs";
 import { compile, compileWithJobText } from "./compiler.mjs";
+import { getGatewayStatus } from "./modelGateway.mjs";
+import { createGuard, listenHost, readBodyLimited } from "./security.mjs";
+import { describeRequest, contactForRequest } from "./documentContact.mjs";
+import { handleEmailRoute, PUBLIC_EMAIL_PATHS } from "./emailRoutes.mjs";
+import { startInboundPoller } from "./connectors/email.mjs";
+import { handleWhatsAppRoute, PUBLIC_WHATSAPP_PATHS } from "./whatsappRoutes.mjs";
+import { getClientMemory } from "./memory/clientMemory.mjs";
 import { runVatFilingPath } from "./scenario/vatFilingPath.mjs";
+import * as teamSystem from "./connectors/teamSystem.mjs";
 import {
-  pendingGates, pendingDocumentRequests, pendingQuestions,
-  resolveDocumentRequest, resolveQuestionById, deliverMonthlyPack, onLadderEvent,
+  pendingGates, pendingDocumentRequests, pendingQuestions, pendingCorrections,
+  prepareDocumentRequestResolution, prepareCorrectionResolution, deliverMonthlyPack, onLadderEvent,
   collectDocument, draftAndSendInvoice, sendReminder, logAttendanceOrExpense,
   answerEmployeeQuestion, trackDeadline, askStudio,
 } from "./lAmministrativo.mjs";
-import { route } from "./smistatore.mjs";
-import { rosterFixture } from "./fixtures/roster.fixture.mjs";
+import { onLadderEvent as onClassificationLadderEvent } from "./classificationGate.mjs";
+import { getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry } from "./rosterStore.mjs";
+import * as archivista from "./archivista.mjs";
+import { defaultApprovalStore } from "./runtime/approvalStore.mjs";
+import { defaultAgentEngine } from "./runtime/agentEngine.mjs";
+import { defaultA2ABus, publishA2A } from "./messaging/a2aBus.mjs";
+import {
+  defaultRuntimeA2AConsumers, startDefaultA2AConsumers, waitForA2AOutcome,
+} from "./runtime/a2aConsumers.mjs";
 
-// Bridge L'Amministrativo's reminder/escalation ladder onto the SSE bus so the
-// frontend sees reminders and escalations live, not just the initial "pending" state. 
-onLadderEvent((e) => {
+// Bridge both L'Amministrativo's (owner-approval, WhatsApp-facing) and Il
+// Classificatore's (studio-internal) reminder/escalation ladders onto the
+// SSE bus so the frontend sees reminders and escalations live, not just the
+// initial "pending" state. Wording differs by seat: only L'Amministrativo's
+// reminders actually go out over WhatsApp to the client owner.
+onLadderEvent((e) => bridgeLadderEvent(e, "sent to the owner"));
+onClassificationLadderEvent((e) => bridgeLadderEvent(e, "still needs a studio professional to confirm it"));
+function bridgeLadderEvent(e, remindPhrase) {
   publish("ladder", e);
   if (e.event === "reminder") {
-    feedFromLadder(e, `reminder #${e.n} sent to the owner${e.kind === "gate" ? ` for gate ${e.gateId}` : ` for request ${e.requestId}`}.`, "warn");
+    feedFromLadder(e, `reminder #${e.n} ${remindPhrase}${e.kind === "gate" ? ` (gate ${e.gateId})` : ` (request ${e.requestId})`}.`, "warn");
   } else if (e.event === "escalate") {
-    feedFromLadder(e, `no response after ${e.kind === "gate" ? "the gate" : "the document request"} reminders — escalated to Lo Smistatore.`, "warn");
-  }
-});
-function feedFromLadder(e, suffix, tone) {
-  publish("feed", { agent: "l_amministrativo", text: `${e.kind === "gate" ? "Gate" : "Document request"} ${suffix}`, tone });
-}
-
-// Bridge Lo Smistatore onto the bus: every already-signed a2a message
-// addressed to it gets routed live, and the decision is published so the
-// frontend can show it. Doesn't touch vatFilingPath.mjs or lAmministrativo.mjs —
-// both already publish "a2a" events with a real `to`, this just reacts to them.
-// >>> TODO (real): rosterFixture is a placeholder (see backend/fixtures/roster.fixture.mjs)
-//     until there's a real staff directory; swap the import, nothing else changes.
-subscribe((e) => {
-  if (e.channel !== "a2a" || !e.message || e.message.to !== "lo_smistatore") return;
-  try {
-    const result = route(e.message, rosterFixture);
-    publish("routing", result);
-    if (result.kind === "routed_task") {
-      publish("feed", {
-        agent: "lo_smistatore",
-        text: `Routed ${result.sourceMessageType} (${result.client}) to ${result.owner}` +
-              `${result.escalated ? ` — escalated to tier ${result.escalationTier}` : ""}.`,
-        tone: result.escalated ? "warn" : "info",
-      });
-    } else {
-      publish("feed", {
-        agent: "lo_smistatore",
-        text: `Could not route ${result.sourceMessageType} for ${result.client} — ${result.reason}.`,
-        tone: "warn",
+    if (e.escalation) {
+      publishA2A(e.escalation, { publisher: e.escalation.from }).catch((error) => {
+        publish("feed", { agent: e.seat || "system", text: `Escalation could not be persisted: ${error.message}`, tone: "warn" });
       });
     }
-  } catch (err) {
-    // A malformed message or an unknown roster shape should never crash the
-    // server — surface it on the feed instead, same as any other agent failure.
-    publish("feed", { agent: "lo_smistatore", text: `Routing failed: ${err.message}`, tone: "warn" });
+    feedFromLadder(e, `no response after ${e.kind === "gate" ? "the gate" : "the document request"} reminders — escalated to Lo Smistatore.`, "warn");
   }
-});
+}
+function feedFromLadder(e, suffix, tone) {
+  publish("feed", { agent: e.seat || "l_amministrativo", text: `${e.kind === "gate" ? "Gate" : "Document request"} ${suffix}`, tone });
+}
+
+// L'Archivista's confidence decay — its job.txt says a confirmed rule should
+// lose trust if it's never re-verified. decayConfidence() existed but
+// nothing ever called it, so a rule stayed at 0.98 confidence forever no
+// matter how stale. Runs once at startup (catches anything already stale
+// across a restart) and once a day after that — decay itself is keyed off
+// each rule's own `lastVerified` age, not this interval, so the exact
+// cadence here doesn't need to be fast to be correct.
+function runConfidenceDecay() {
+  const decayed = archivista.decayConfidence();
+  for (const rec of decayed) {
+    publish("knowledge", { record: rec, note: `Confidence decayed to ${rec.confidence} — not re-verified in over 90 days.` });
+  }
+}
+runConfidenceDecay();
+setInterval(runConfidenceDecay, 24 * 60 * 60 * 1000);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pub = join(here, "..", "frontend");
 const PORT = process.env.PORT || 5173;
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.on("data", (c) => (data += c));
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
+const readBody = readBodyLimited; // hard size cap, see security.mjs
+
+async function publishA2AForRequest(res, message, { waitForOutcome = false } = {}) {
+  try {
+    await publishA2A(message, { publisher: message.from });
+    return waitForOutcome ? await waitForA2AOutcome(message.id) : true;
+  } catch (error) {
+    res.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({
+      error: "A2A delivery is temporarily unavailable.",
+      code: error?.code || "A2A_DELIVERY_FAILED",
+    }));
+    return false;
+  }
 }
 
-const server = createServer(async (req, res) => {
+function operatorAuthorized(req) {
+  const expected = process.env.A2A_OPERATOR_TOKEN;
+  if (!expected) return { ok: false, status: 503, code: "OPERATOR_AUTH_NOT_CONFIGURED" };
+  const supplied = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const actualBytes = Buffer.from(supplied, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  const ok = actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+  return ok ? { ok: true } : { ok: false, status: 403, code: "OPERATOR_AUTH_FAILED" };
+}
+
+// Every request passes the security guard first (CORS allowlist, CSRF check,
+// optional login, hardening headers) — see security.mjs.
+const { guard } = createGuard({
+  port: PORT,
+  publicPaths: [...PUBLIC_EMAIL_PATHS, ...PUBLIC_WHATSAPP_PATHS],
+  csp: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+});
+
+const server = createServer((req, res) => handleRequest(req, res).catch((e) => {
+  // One bad request (e.g. an oversized body) must not crash the process.
+  console.error(`[server] unhandled error on ${req.method} ${req.url}:`, e);
+  if (!res.headersSent) res.writeHead(e.status || (e instanceof SyntaxError ? 400 : 500), { "Content-Type": "application/json", ...(e.status === 413 ? { Connection: "close" } : {}) }).end(JSON.stringify({ error: e.status === 413 ? "request body too large" : e instanceof SyntaxError ? "malformed JSON" : "internal error" }));
+}));
+
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+  if (!(await guard(req, res, url))) return;
 
   if (url.pathname === "/events") {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    res.write(": connected\n\n"); // flush headers now so the browser reports Live even before the first event
     for (const e of history()) res.write(`data: ${JSON.stringify(e)}\n\n`);
     const off = subscribe((e) => res.write(`data: ${JSON.stringify(e)}\n\n`));
     req.on("close", off);
     return;
   }
 
+  // GET /api/ts-clients — the roster from the TeamSystem Firm mock, for a
+  // real client picker instead of a single hardcoded demo run.
+  if (url.pathname === "/api/ts-clients" && req.method === "GET") {
+    const list = await teamSystem.listClients();
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
+    return;
+  }
+
+  if (await handleEmailRoute(req, res, url, readBody)) return;
+  if (await handleWhatsAppRoute(req, res, url, readBody)) return;
+
+  // GET /api/client-memory/:clientId — Cortex memory for one client: run
+  // history/trend, recurring problems, learned supplier rules, last run's actions.
+  const memMatch = url.pathname.match(/^\/api\/client-memory\/([^/]+)$/);
+  if (memMatch && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(getClientMemory(decodeURIComponent(memMatch[1]))));
+    return;
+  }
+
+  // GET /api/ts-workflow/:clientId — what TeamSystem did after the write-backs.
+  const wfMatch = url.pathname.match(/^\/api\/ts-workflow\/([^/]+)$/);
+  if (wfMatch && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(await teamSystem.readWorkflow(decodeURIComponent(wfMatch[1]))));
+    return;
+  }
+
+  // GET /api/ts-clients/:id — one client's master data + chart of accounts,
+  // for the Clients tab's detail panel once a client is picked.
+  const tsClientMatch = url.pathname.match(/^\/api\/ts-clients\/([^/]+)$/);
+  if (tsClientMatch && req.method === "GET") {
+    const master = await teamSystem.readMasterData(decodeURIComponent(tsClientMatch[1]));
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(master));
+    return;
+  }
+
+  // GET /api/gateway-status — which model-gateway tier askModel() would
+  // currently land on (edge SLM / cloud fallback / offline heuristic).
+  if (url.pathname === "/api/gateway-status" && req.method === "GET") {
+    const status = await getGatewayStatus();
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(status));
+    return;
+  }
+
+  if (url.pathname === "/api/a2a-health" && req.method === "GET") {
+    try {
+      const status = await defaultA2ABus.health();
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(status));
+    } catch (error) {
+      res.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({
+        connected: false, error: String(error?.message || error),
+      }));
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/a2a-dead-letters" && req.method === "GET") {
+    try {
+      const records = (await defaultA2ABus.deadLetters({ count: 100 })).map((record) => ({
+        id: record.id,
+        messageId: record.messageId || null,
+        recipient: record.recipient || null,
+        failure: typeof record.failure === "string" ? JSON.parse(record.failure) : record.failure,
+        at: record.at || null,
+      }));
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(records));
+    } catch (error) {
+      res.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(error?.message || error) }));
+    }
+    return;
+  }
+
+  const deadLetterReplayMatch = url.pathname.match(/^\/api\/a2a-dead-letters\/([^/]+)\/replay$/);
+  if (deadLetterReplayMatch && req.method === "POST") {
+    const authorization = operatorAuthorized(req);
+    if (!authorization.ok) {
+      res.writeHead(authorization.status, { "Content-Type": "application/json" }).end(JSON.stringify({
+        error: "Operator authorization is required for dead-letter replay.", code: authorization.code,
+      }));
+      return;
+    }
+    try {
+      const result = await defaultA2ABus.replayDeadLetter(decodeURIComponent(deadLetterReplayMatch[1]));
+      res.writeHead(202, { "Content-Type": "application/json" }).end(JSON.stringify({
+        accepted: true,
+        messageId: result.messageId || null,
+        recipient: result.recipient,
+        deliveryId: result.id,
+      }));
+    } catch (error) {
+      const status = error?.code === "DEAD_LETTER_NOT_FOUND" ? 404 : 503;
+      res.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify({
+        error: error?.message || "Dead-letter replay failed.", code: error?.code || "DEAD_LETTER_REPLAY_FAILED",
+      }));
+    }
+    return;
+  }
+
   if (url.pathname === "/api/run-demo" || url.pathname === "/api/run-golden-path") {
-    runVatFilingPath();
+    const clientId = url.searchParams.get("client") || "rossi_srl";
+    // Never let a failure anywhere in the pipeline become an unhandled
+    // rejection — that crashes the whole Node process (this happened for
+    // real: a rejected Fatture in Cloud call took the entire server down
+    // mid-demo, with no error visible in the UI, just silence).
+    runVatFilingPath(clientId).catch((e) => {
+      console.error("[demo] run failed:", e);
+      publish("board", { step: "error", label: `Run failed for ${clientId}: ${e.message}` });
+      publish("feed", { agent: "system", text: `Run failed: ${e.message}`, tone: "warn" });
+    });
     res.writeHead(202).end('{"started":true}');
     return;
   }
@@ -100,11 +249,11 @@ const server = createServer(async (req, res) => {
       if (req.method === "POST") {
         const body = await readBody(req);
         const { jobText } = body ? JSON.parse(body) : {};
-        const { manifest, skill, usedCustomJobText } = await compileWithJobText(seat, jobText);
-        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ manifest, skill, usedCustomJobText }));
+        const { manifest, skill, warnings, usedCustomJobText } = await compileWithJobText(seat, jobText);
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ manifest, skill, warnings, usedCustomJobText }));
       } else {
-        const { manifest, skill } = await compile(seat);
-        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ manifest, skill }));
+        const { manifest, skill, warnings } = await compile(seat);
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ manifest, skill, warnings }));
       }
     } catch (e) {
       res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
@@ -114,30 +263,90 @@ const server = createServer(async (req, res) => {
 
   // ---- owner-approval gate API (used by L'Amministrativo's draftAndSendInvoice) ----
   if (url.pathname === "/api/gates" && req.method === "GET") {
-    const list = [...pendingGates.values()].map((t) => ({ id: t.id, clientId: t.clientId, action: t.action, payload: t.payload, status: t.status, remindersSent: t.remindersSent, escalated: t.escalated }));
+    const legacy = [...pendingGates.values()].map((t) => ({ id: t.id, clientId: t.clientId, action: t.action, payload: t.payload, status: t.status, remindersSent: t.remindersSent, escalated: t.escalated, kind: "legacy" }));
+    const runtime = (await defaultApprovalStore.list({ status: "pending" })).map((approval) => ({
+      id: approval.id, clientId: approval.clientId, seat: approval.seat, action: approval.action,
+      toolId: approval.toolId, status: approval.status, requiredApprover: approval.requiredApprover,
+      createdAt: approval.createdAt, expiresAt: approval.expiresAt, payload: { runId: approval.runId },
+      remindersSent: 0, escalated: false, kind: "runtime",
+    }));
+    const list = [...legacy, ...runtime];
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
     return;
   }
   const gateMatch = url.pathname.match(/^\/api\/gate\/([^/]+)\/(approve|deny)$/);
   if (gateMatch && req.method === "POST") {
     const [, id, action] = gateMatch;
-    const ticket = pendingGates.get(id);
-    if (!ticket) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such gate" })); return; }
     const body = await readBody(req);
-    const { approvedBy, reason } = body ? JSON.parse(body) : {};
+    const { approvedBy, approverRole, reason } = body ? JSON.parse(body) : {};
     try {
-      if (action === "approve") ticket.approve(approvedBy || "owner"); else ticket.deny(reason);
-      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id, action }));
+      const ticket = pendingGates.get(id);
+      if (ticket) {
+        if (action === "approve") ticket.approve(approvedBy || "owner"); else ticket.deny(reason);
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id, action, kind: "legacy" }));
+        return;
+      }
+      const approval = await defaultApprovalStore.get(id);
+      if (!approval) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such gate" })); return; }
+      const resolved = action === "approve"
+        ? await defaultApprovalStore.approve(id, { approvedBy, approverRole })
+        : await defaultApprovalStore.deny(id, { deniedBy: approvedBy || "operator", reason });
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+        ok: true, id, action, kind: "runtime", status: resolved.status,
+        resume: action === "approve" ? { runId: resolved.runId, instruction: "Rerun the same operation with the same runId and input." } : null,
+      }));
     } catch (e) {
       res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
     }
     return;
   }
 
+  // ---- Lo Smistatore's real staff roster (Team page) — who's actually on
+  // the desk, what they're competent for, which clients they own, whether
+  // they're available. Replaces the hardcoded fixture route() used to read
+  // permanently; edits here take effect on the very next routed message. ----
+  if (url.pathname === "/api/roster" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(getRoster()));
+    return;
+  }
+  if (url.pathname === "/api/roster" && req.method === "POST") {
+    const body = await readBody(req);
+    try {
+      const entry = addRosterEntry(body ? JSON.parse(body) : {});
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(entry));
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
+    }
+    return;
+  }
+  const rosterMatch = url.pathname.match(/^\/api\/roster\/([^/]+)$/);
+  if (rosterMatch && req.method === "PATCH") {
+    const body = await readBody(req);
+    try {
+      const updated = updateRosterEntry(rosterMatch[1], body ? JSON.parse(body) : {});
+      if (!updated) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such roster entry" })); return; }
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(updated));
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: String(e) }));
+    }
+    return;
+  }
+  if (rosterMatch && req.method === "DELETE") {
+    const ok = removeRosterEntry(rosterMatch[1]);
+    res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" }).end(JSON.stringify({ ok }));
+    return;
+  }
+
   // ---- document-request API (used by L'Amministrativo's collectDocument) ----
   if (url.pathname === "/api/document-requests" && req.method === "GET") {
-    const list = [...pendingDocumentRequests.values()].map((r) => ({ id: r.id, clientId: r.clientId, expected: r.expected, status: r.status, remindersSent: r.remindersSent, escalated: r.escalated }));
+    const list = await Promise.all([...pendingDocumentRequests.values()].map(describeRequest));
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
+    return;
+  }
+  const docContactMatch = url.pathname.match(/^\/api\/document-requests\/([^/]+)\/contact$/);
+  if (docContactMatch && req.method === "POST") {
+    const out = await contactForRequest(decodeURIComponent(docContactMatch[1]), JSON.parse((await readBody(req)) || "{}"));
+    res.writeHead(out.status, { "Content-Type": "application/json" }).end(JSON.stringify(out.body));
     return;
   }
   const docReqMatch = url.pathname.match(/^\/api\/document-requests\/([^/]+)\/resolve$/);
@@ -145,10 +354,36 @@ const server = createServer(async (req, res) => {
     const [, id] = docReqMatch;
     const body = await readBody(req);
     const { sdiId } = body ? JSON.parse(body) : {};
-    const result = resolveDocumentRequest(id, { foundVia: "owner_reply", sdiId });
-    if (!result) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such request, or already resolved" })); return; }
+    const resolution = prepareDocumentRequestResolution(id, { foundVia: "owner_reply", sdiId });
+    if (!resolution) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such request, or already resolved" })); return; }
+    if (!await publishA2AForRequest(res, resolution.a2a)) return;
+    const result = resolution.commit();
+    if (!result) { res.writeHead(409, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "request state changed before resolution completed" })); return; }
     publish("evidence", { record: result.evidence });
-    publish("a2a", { message: result.a2a });
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id }));
+    return;
+  }
+
+  // ---- correction requests relayed to the owner (handleCorrectionRequest) ----
+  if (url.pathname === "/api/corrections" && req.method === "GET") {
+    const list = [...pendingCorrections.values()].map((c) => ({
+      id: c.id, clientId: c.clientId, ruleId: c.ruleId, message: c.message, period: c.period,
+      status: c.status, remindersSent: c.remindersSent, escalated: c.escalated, createdAt: c.createdAt,
+    }));
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(list));
+    return;
+  }
+  const correctionMatch = url.pathname.match(/^\/api\/corrections\/([^/]+)\/resolve$/);
+  if (correctionMatch && req.method === "POST") {
+    const id = decodeURIComponent(correctionMatch[1]);
+    const body = await readBody(req);
+    const { answer, confirmedBy } = body ? JSON.parse(body) : {};
+    const resolution = prepareCorrectionResolution(id, { answer, confirmedBy });
+    if (!resolution) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "no such correction, or already resolved" })); return; }
+    if (!await publishA2AForRequest(res, resolution.a2a)) return;
+    const result = resolution.commit();
+    if (!result) { res.writeHead(409, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "correction state changed before resolution completed" })); return; }
+    publish("evidence", { record: result.evidence });
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id }));
     return;
   }
@@ -169,9 +404,16 @@ const server = createServer(async (req, res) => {
     const finalAnswer = answer || `Studio's reply to "${question.topic}".`;
     const finalEvidenceId = evidenceId || `studio_${Date.now()}`;
     // Simulate the incoming message this endpoint stands in for
-    const incoming = makeMessage({ from: "lo_smistatore", to: "l_amministrativo", client: question.clientId, type: "answer_with_evidence", answer: finalAnswer, evidenceId: finalEvidenceId });
-    publish("a2a", { message: incoming });
-    resolveQuestionById(id, { answer: finalAnswer, evidenceId: finalEvidenceId });
+    const incoming = makeMessage({
+      from: "lo_smistatore", to: "l_amministrativo", client: question.clientId,
+      type: "answer_with_evidence", answer: finalAnswer, evidenceId: finalEvidenceId, ref: id,
+    });
+    const outcome = await publishA2AForRequest(res, incoming, { waitForOutcome: true });
+    if (!outcome) return;
+    if (!outcome.result?.resolved) {
+      res.writeHead(409, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "question state changed before the answer was applied" }));
+      return;
+    }
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, id }));
     return;
   }
@@ -183,7 +425,7 @@ const server = createServer(async (req, res) => {
     const period = decodeURIComponent(packMatch[2]);
     const result = await deliverMonthlyPack(clientId, period);
     publish("evidence", { record: result.evidence });
-    publish("a2a", { message: result.a2a });
+    if (!await publishA2AForRequest(res, result.a2a)) return;
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, pack: result.pack }));
     return;
   }
@@ -195,7 +437,8 @@ const server = createServer(async (req, res) => {
     const gates = [...pendingGates.values()].filter((g) => g.clientId === clientId).length;
     const docReqs = [...pendingDocumentRequests.values()].filter((r) => r.clientId === clientId).length;
     const questions = [...pendingQuestions.values()].filter((q) => q.clientId === clientId).length;
-    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ clientId, gates, docReqs, questions }));
+    const corrections = [...pendingCorrections.values()].filter((c) => c.clientId === clientId).length;
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ clientId, gates, docReqs, questions, corrections }));
     return;
   }
 
@@ -247,8 +490,8 @@ const server = createServer(async (req, res) => {
       // Anything this produced (evidence, an a2a message, a new gate) shows
       // up on the live bus too — not a side channel only this response sees.
       if (result && result.evidence) publish("evidence", { record: result.evidence });
-      if (result && result.ack) publish("a2a", { message: result.ack });
-      if (result && result.a2a) publish("a2a", { message: result.a2a });
+      if (result && result.ack) await publishA2A(result.ack, { publisher: result.ack.from });
+      if (result && result.a2a) await publishA2A(result.a2a, { publisher: result.a2a.from });
       if (result && result.ticket) publish("gate", { id: result.ticket.id, clientId, action: result.ticket.action, payload: result.ticket.payload, status: "pending" });
       res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, result }));
     } catch (e) {
@@ -257,12 +500,41 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Front-end libraries are served from node_modules, not a public CDN: works offline and in locked-down networks.
+  const VENDOR = { "/vendor/react.production.min.js": "react/umd/react.production.min.js", "/vendor/react-dom.production.min.js": "react-dom/umd/react-dom.production.min.js" };
+  if (VENDOR[url.pathname] && req.method === "GET") {
+    try {
+      const body = await readFile(join(here, "..", "node_modules", VENDOR[url.pathname]));
+      res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "public, max-age=86400" }).end(body);
+    } catch { res.writeHead(404).end("Not found"); }
+    return;
+  }
+
   // static
   let p = url.pathname === "/" ? "/index.html" : url.pathname;
+  const filePath = resolve(pub, "." + decodeURIComponent(p));
+  if (!filePath.startsWith(resolve(pub) + sep)) { res.writeHead(404).end("Not found"); return; } // no path traversal out of frontend/
   try {
-    const body = await readFile(join(pub, p));
+    const body = await readFile(filePath);
     res.writeHead(200, { "Content-Type": MIME[extname(p)] || "application/octet-stream", "Cache-Control": "no-store" }).end(body);
   } catch { res.writeHead(404).end("Not found"); }
-});
+}
 
-server.listen(PORT, () => console.log(`Agent Desk starter on http://localhost:${PORT}`));
+// Fail startup if an enabled runtime seat advertises a business tool that has
+// no registered implementation, or if an operation declares a tool outside
+// its manifest. A2A endpoint/handoff entries are messaging capabilities.
+await defaultAgentEngine.validateConfiguration();
+await startDefaultA2AConsumers();
+startInboundPoller(); // no-op unless IMAP_* is configured
+server.listen(PORT, listenHost(), () => console.log(`Agent Desk starter on http://${listenHost()}:${PORT}`));
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await new Promise((resolve) => server.close(resolve));
+  await defaultRuntimeA2AConsumers.close();
+  await defaultA2ABus.close();
+}
+process.once("SIGINT", () => shutdown().finally(() => process.exit(0)));
+process.once("SIGTERM", () => shutdown().finally(() => process.exit(0)));

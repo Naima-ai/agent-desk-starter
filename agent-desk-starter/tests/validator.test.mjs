@@ -8,11 +8,19 @@ import {
   checkRateNaturaExclusivity,
   checkNaturaSubcode,
   checkArithmetic,
+  checkSupplierIdentifier,
+  checkMandatoryFields,
+  checkRequiredEvidence,
+  checkLegalWording,
+  checkTemporalCoherence,
+  checkUniqueLineNumbers,
+  checkVatGroupIdentity,
   runVatRules,
 } from "../backend/vatRules.mjs";
 import { validateBatch } from "../backend/validator.mjs";
 import * as archivista from "../backend/archivista.mjs";
 import * as knowledge from "../backend/memory/knowledgeStore.mjs";
+import * as teamSystem from "../backend/connectors/teamSystem.mjs";
 
 // The Rulebook's own worked example (Section 8.4): a hotel/accommodation line
 // posted at 22% when the client's taxonomy expects 10% for that category.
@@ -99,7 +107,7 @@ test("validateBatch stays clean when nothing is actually wrong", () => {
 
 test("Archivist: a rule starts in shadow mode, then a human confirms it at the gate", () => {
   const key = `coa:TestSupplier_${Date.now()}`;
-  archivista.proposeRule({ key, kind: "coa_mapping", scope: "client:test", value: "60.10", source: "correction" });
+  archivista.proposeRule({ key, kind: "coa_mapping", scope: "client:test", value: "60.10", source: "correction", evidenceId: "ev_propose_test" });
   assert.equal(knowledge.get(key).status, "shadow");
 
   archivista.confirmRule(key, "Bianchi", "ev_test");
@@ -107,4 +115,129 @@ test("Archivist: a rule starts in shadow mode, then a human confirms it at the g
   assert.equal(confirmed.status, "confirmed");
   assert.equal(confirmed.confidence, 0.98);
   assert.equal(confirmed.confirmedBy, "Bianchi");
+});
+
+test("Archivist: REFUSED — never stores a rule without evidence", () => {
+  const key = `coa:NoEvidenceSupplier_${Date.now()}`;
+  assert.throws(() => archivista.proposeRule({ key, kind: "coa_mapping", scope: "client:test", value: "60.10", source: "correction" }), /REFUSED/);
+  assert.throws(() => archivista.confirmRule(key, "Bianchi"), /REFUSED/);
+});
+
+// --- FMT-03: supplier Partita IVA check digit -------------------------------
+
+test("FMT-03 accepts a Partita IVA with a correct check digit", () => {
+  const line = { id: "X1", supplier: "Test Srl", piva: "12345678903" }; // computed, not guessed
+  assert.equal(checkSupplierIdentifier(line), null);
+});
+
+test("FMT-03 rejects a Partita IVA with a wrong check digit", () => {
+  const line = { id: "X2", supplier: "Gamma Forniture Srl", piva: "55667788991" }; // last digit deliberately wrong
+  const hit = checkSupplierIdentifier(line);
+  assert.ok(hit);
+  assert.equal(hit.ruleId, "FMT-03");
+  assert.equal(hit.kind, "identifier_invalid");
+});
+
+test("FMT-03 is a no-op on a line that doesn't track an identifier at all", () => {
+  const line = { id: "X3", supplier: "Enel Energia" }; // no piva field — not this rule's problem yet
+  assert.equal(checkSupplierIdentifier(line), null);
+});
+
+// --- The TeamSystem mock's own dataset: the brief's three seeded test cases -
+
+test("the TeamSystem-sourced batch reproduces all three of the brief's seeded test cases", async () => {
+  const batch = await teamSystem.readVatBatch();
+  const priorPeriod = await teamSystem.readPriorPeriod();
+  const taxonomy = await teamSystem.readChartOfAccounts();
+  const { anomalies } = validateBatch(batch, { receivedDocs: [], priorPeriod, taxonomy });
+
+  const rateMismatch = anomalies.find((a) => a.ruleId === "CST-04" && a.line === "L6");
+  assert.ok(rateMismatch, "expected Hotel Milano (L6) flagged 22% vs 10%");
+  assert.equal(rateMismatch.observed, 22);
+  assert.equal(rateMismatch.expected, 10);
+
+  const missingInvoice = anomalies.find((a) => a.ruleId === "DOC-MISSING");
+  assert.ok(missingInvoice, "expected the missing Verdi Srl purchase invoice flagged");
+
+  const badPiva = anomalies.find((a) => a.ruleId === "FMT-03" && a.line === "L7");
+  assert.ok(badPiva, "expected Gamma Forniture Srl's invalid Partita IVA flagged");
+
+  // and every line came back cross-checked through the Fatture in Cloud connector
+  assert.ok(batch.lines.every((l) => l.fic && "live" in l.fic), "expected every line to carry a FiC lookup result");
+});
+
+test("readMasterData / readChartOfAccounts actually come from the TeamSystem mock, not a direct import", async () => {
+  const master = await teamSystem.readMasterData();
+  assert.equal(master.id, "rossi_srl");
+  assert.ok(master.piva);
+
+  const coa = await teamSystem.readChartOfAccounts();
+  assert.ok(coa.find((c) => c.code === "60.30" && c.rate === 10), "expected the Hotel/accommodation category at 10%");
+});
+
+// --- The six new checks added for the TeamSystem Firm mock's 10-client edge cases ---
+
+test("CON-01 flags a line with date explicitly null, not one that just doesn't track it", () => {
+  assert.equal(checkMandatoryFields({ id: "X1", supplier: "S", date: null }).ruleId, "CON-01");
+  assert.equal(checkMandatoryFields({ id: "X2", supplier: "S" }), null); // undefined = not tracked here, not this rule's problem
+  assert.equal(checkMandatoryFields({ id: "X3", supplier: "S", date: "2026-08-01" }), null);
+});
+
+test("CON-02 flags required evidence that isn't attached, ignores lines that don't need any", () => {
+  assert.equal(checkRequiredEvidence({ id: "X1", supplier: "S", requiresEvidence: true, evidenceAttached: false }).ruleId, "CON-02");
+  assert.equal(checkRequiredEvidence({ id: "X2", supplier: "S", requiresEvidence: true, evidenceAttached: true }), null);
+  assert.equal(checkRequiredEvidence({ id: "X3", supplier: "S" }), null);
+});
+
+test("CON-03 flags a split-payment or reverse-charge line missing its mandatory wording", () => {
+  assert.equal(checkLegalWording({ id: "X1", supplier: "S", splitPayment: true, legalWording: null }).ruleId, "CON-03");
+  assert.equal(checkLegalWording({ id: "X2", supplier: "S", natura: "N6.7", legalWording: null }).ruleId, "CON-03");
+  assert.equal(checkLegalWording({ id: "X3", supplier: "S", natura: "N6.7", legalWording: "Inversione contabile" }), null);
+  assert.equal(checkLegalWording({ id: "X4", supplier: "S" }), null);
+});
+
+test("CST-07 flags a supply date after the invoice date, ignores lines without both dates", () => {
+  const hit = checkTemporalCoherence({ id: "X1", supplier: "S", invoiceDate: "2026-08-10", supplyDate: "2026-08-18" });
+  assert.equal(hit.ruleId, "CST-07");
+  assert.equal(checkTemporalCoherence({ id: "X2", supplier: "S", invoiceDate: "2026-08-18", supplyDate: "2026-08-10" }), null);
+  assert.equal(checkTemporalCoherence({ id: "X3", supplier: "S", date: "2026-08-10" }), null);
+});
+
+test("STR-02 flags two lines in the same document sharing a line number", () => {
+  const lines = [
+    { id: "L1", docNumber: "FT-1", lineNumber: 1 },
+    { id: "L2", docNumber: "FT-1", lineNumber: 1 },
+    { id: "L3", docNumber: "FT-1", lineNumber: 2 },
+  ];
+  const hits = checkUniqueLineNumbers(lines);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].ruleId, "STR-02");
+});
+
+test("SDI-00327 flags a VAT Group member's invoice using the Group CF instead of its own", () => {
+  const vatGroup = { isMember: true, groupCf: "GROUPCF", memberCf: "MEMBERCF" };
+  const bad = checkVatGroupIdentity({ id: "X1", counterpartyCfUsed: "GROUPCF" }, vatGroup);
+  assert.equal(bad.ruleId, "SDI-00327");
+  assert.equal(checkVatGroupIdentity({ id: "X2", counterpartyCfUsed: "MEMBERCF" }, vatGroup), null);
+  assert.equal(checkVatGroupIdentity({ id: "X3", counterpartyCfUsed: "GROUPCF" }, null), null); // not a Group member — not this rule's business
+});
+
+test("every TeamSystem Firm mock client validates exactly as designed", async () => {
+  // tests/ -> agent-desk-starter (inner)/ -> agent-desk-starter (outer)/ -> teamsystem-firm-mock/
+  const mockDataUrl = new URL("../../teamsystem-firm-mock/backend/data/clients.mjs", import.meta.url);
+  const { clients } = await import(mockDataUrl);
+  const cleanExpected = new Set(["verdi_costruzioni", "ferrari_forfettario", "gallo_esente", "azienda_generale"]);
+
+  for (const c of clients) {
+    const { anomalies, tail } = validateBatch(
+      { lines: c.lines, expected: c.expected || [] },
+      { taxonomy: c.chartOfAccounts, vatGroup: c.vatGroup, priorPeriod: c.priorLines ? { lines: c.priorLines } : null }
+    );
+    const isClean = anomalies.length === 0 && tail.length === 0;
+    if (cleanExpected.has(c.id)) {
+      assert.ok(isClean, `${c.name} was meant to be a clean positive case, but got: ${JSON.stringify(anomalies)}`);
+    } else {
+      assert.ok(!isClean, `${c.name} was meant to demonstrate "${c.edgeCase}", but validated clean`);
+    }
+  }
 });

@@ -25,13 +25,14 @@
     answer_with_evidence:      { label: "answer with evidence",    bg: "#E7F0FD", fg: "#0A63E0" },
     escalation_requested:      { label: "escalation requested",    bg: "#FBEAE8", fg: "#C0473C" },
     acknowledgment:            { label: "acknowledgment",          bg: "#F6F8FC", fg: "#5B6B85" },
+    correction_request:        { label: "correction request",      bg: "#FBEAE8", fg: "#C0473C" },
   };
 
   // ---- SSE bus ---------------------------------------------------------------
   // Subscribes once, buckets every event by its channel, and reports whether
   // the connection is currently live so the UI can show it honestly.
   function useBus() {
-    const [ev, setEv] = useState({ a2a: [], feed: [], board: [], evidence: [], knowledge: [], coa: [], gate: [], ladder: [] });
+    const [ev, setEv] = useState({ a2a: [], feed: [], board: [], evidence: [], knowledge: [], coa: [], gate: [], ladder: [], routing: [] });
     const [live, setLive] = useState(false);
     useEffect(() => {
       const es = new EventSource("/events");
@@ -39,7 +40,16 @@
       es.onerror = () => setLive(false);
       es.onmessage = (m) => {
         const e = JSON.parse(m.data);
-        setEv((s) => ({ ...s, [e.channel]: [...(s[e.channel] || []), e] }));
+        setEv((s) => {
+          // "start" marks the beginning of one client's run — without this,
+          // the Board/feed just accumulate every run's steps forever (this
+          // server keeps its full event history and replays all of it to
+          // every new connection too), so whichever client was validated
+          // first this session — usually Rossi Srl, the default — never
+          // clears and its steps end up dominating every later client's view.
+          if (e.channel === "board" && e.step === "start") return { ...s, board: [e], feed: [] };
+          return { ...s, [e.channel]: [...(s[e.channel] || []), e] };
+        });
       };
       return () => es.close();
     }, []);
@@ -69,18 +79,44 @@
   }
   async function postJSON(url, body) {
     const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    if (!r.ok) {
+      let msg = null; try { msg = (await r.json()).error; } catch { /* not JSON */ }
+      throw new Error(msg || `${url} -> ${r.status}`);
+    }
+    return r.json();
+  }
+  async function patchJSON(url, body) {
+    const r = await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    return r.json();
+  }
+  async function deleteJSON(url) {
+    const r = await fetch(url, { method: "DELETE" });
     if (!r.ok) throw new Error(`${url} -> ${r.status}`);
     return r.json();
   }
 
-  const runDemo               = () => getJSON("/api/run-demo");
+  const runDemo               = (clientId) => getJSON(`/api/run-demo${clientId ? `?client=${encodeURIComponent(clientId)}` : ""}`);
+  const getTsClients          = () => getJSON("/api/ts-clients");
+  const getTsClient           = (id) => getJSON(`/api/ts-clients/${encodeURIComponent(id)}`);
+  const getGatewayStatus       = () => getJSON("/api/gateway-status");
+  const getClientMemory        = (clientId) => getJSON(`/api/client-memory/${encodeURIComponent(clientId)}`);
+  const getTsWorkflow          = (clientId) => getJSON(`/api/ts-workflow/${encodeURIComponent(clientId)}`);
+  const getEmailStatus         = () => getJSON("/api/email/status");
+  const getEmailMessages       = (clientId) => getJSON(`/api/email/messages?client=${encodeURIComponent(clientId)}`);
+  const sendClientEmail        = (clientId, subject, body) => postJSON("/api/email/send", { clientId, subject, body });
+  const contactDocumentRequest = (id, payload) => postJSON(`/api/document-requests/${encodeURIComponent(id)}/contact`, payload);
   const getGates               = () => getJSON("/api/gates");
-  const approveGate            = (id, approvedBy) => postJSON(`/api/gate/${id}/approve`, { approvedBy });
+  const approveGate            = (id, approvedBy, approverRole) => postJSON(`/api/gate/${id}/approve`, { approvedBy, approverRole });
   const denyGate                = (id, reason) => postJSON(`/api/gate/${id}/deny`, { reason });
   const getDocumentRequests    = () => getJSON("/api/document-requests");
   const resolveDocumentRequest = (id, sdiId) => postJSON(`/api/document-requests/${id}/resolve`, { sdiId });
   const getQuestions           = () => getJSON("/api/questions");
   const resolveQuestion        = (id, answer, evidenceId) => postJSON(`/api/questions/${id}/resolve`, { answer, evidenceId });
+  const getRoster               = () => getJSON("/api/roster");
+  const addRosterEntry          = (entry) => postJSON("/api/roster", entry);
+  const updateRosterEntry       = (id, patch) => patchJSON(`/api/roster/${encodeURIComponent(id)}`, patch);
+  const removeRosterEntry       = (id) => deleteJSON(`/api/roster/${encodeURIComponent(id)}`);
   const compileSeat = (seatId, jobText) =>
     jobText && jobText.trim() ? postJSON(`/api/compile/${seatId}`, { jobText }) : getJSON(`/api/compile/${seatId}`);
   const deliverPack = (clientId, period) => postJSON(`/api/deliver-pack/${encodeURIComponent(clientId)}/${encodeURIComponent(period)}`, {});
@@ -166,9 +202,10 @@
 
   window.AgentDeskAPI = {
     SEATS, SEAT_BY_ID, AGENT_COLOR, A2A_TYPE_META, SKILL_TEST_CONFIG,
-    useBus, usePendingCount, useNowTick, runDemo, getGates, approveGate, denyGate,
+    useBus, usePendingCount, useNowTick, runDemo, getTsClients, getTsClient, getGatewayStatus, getClientMemory, getTsWorkflow, getEmailStatus, getEmailMessages, sendClientEmail, contactDocumentRequest, getGates, approveGate, denyGate,
     getDocumentRequests, resolveDocumentRequest, getQuestions, resolveQuestion,
     compileSeat, deliverPack, getRuntimeStatus, testSkill,
+    getRoster, addRosterEntry, updateRosterEntry, removeRosterEntry,
     timeAgo, tokenizeJSON,
   };
 })();
