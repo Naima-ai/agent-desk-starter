@@ -17,7 +17,6 @@
 import { vatBatch, priorPeriodBatch, period, client, chartOfAccounts } from "../seed.mjs";
 import * as fattureInCloud from "./fattureInCloud.mjs";
 import * as ingestion from "../ingestion.mjs";
-import { serviceAuthHeaders } from "../security.mjs";
 
 const TS_FIRM_URL = process.env.TS_FIRM_URL || "http://127.0.0.1:5680";
 const DEFAULT_CLIENT_ID = client.id;
@@ -26,7 +25,7 @@ const writeBackLog = []; // in-memory ledger of what's been written back this se
 async function tsFirm(path, { method = "GET", body, timeoutMs = 2000 } = {}) {
   const res = await fetch(`${TS_FIRM_URL}${path}`, {
     method,
-    headers: { ...serviceAuthHeaders(), ...(body ? { "Content-Type": "application/json" } : {}) },
+    headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -84,7 +83,7 @@ async function ingestAndNormalise(clientId, format) {
   const path = `/api/clients/${encodeURIComponent(clientId)}/source`;
   let raw;
   try {
-    const res = await fetch(`${TS_FIRM_URL}${path}`, { headers: serviceAuthHeaders(), signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${TS_FIRM_URL}${path}`, { signal: AbortSignal.timeout(2000) });
     if (!res.ok) throw new Error(`${path} -> ${res.status}`);
     raw = await res.text();
   } catch (e) {
@@ -126,7 +125,7 @@ async function ingestAttachments(clientId) {
   try {
     const list = await tsFirm(`/api/clients/${encodeURIComponent(clientId)}/attachments`);
     for (const att of list) {
-      const res = await fetch(`${TS_FIRM_URL}/api/clients/${encodeURIComponent(clientId)}/attachments/${encodeURIComponent(att.docId)}`, { headers: serviceAuthHeaders(), signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${TS_FIRM_URL}/api/clients/${encodeURIComponent(clientId)}/attachments/${encodeURIComponent(att.docId)}`, { signal: AbortSignal.timeout(2000) });
       if (!res.ok) continue;
       const bytes = Buffer.from(await res.arrayBuffer());
       ingestion.ingest({ source: "TeamSystem Firm mock", channel: "attachment-upload", clientId, raw: bytes, format: "pdf" });

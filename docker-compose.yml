@@ -1,12 +1,12 @@
 # Agent Desk — runs the whole stack with one command.
 #
-#   1. cp .env.docker.example .env      and set DESK_ACCESS_TOKEN (a long random string)
-#   2. docker compose up -d --build     (add --profile llm for the local Qwen model)
-#   3. open http://localhost:5173       and sign in with the token
+#   1. docker compose up -d --build     (add --profile llm for the local Qwen model)
+#   2. open http://localhost:5173       (TeamSystem: http://localhost:5680)
+#   Optional: cp .env.docker.example .env  to set email / WhatsApp / API keys.
 #
-# Only the two web UIs are published, and only on this machine (127.0.0.1).
-# To expose them, put a TLS reverse proxy (Caddy/nginx/Traefik) in front and set
-# PUBLIC_ORIGIN / TS_PUBLIC_ORIGIN + COOKIE_SECURE=true in .env.
+# Only the two web UIs are published, and only on this machine (127.0.0.1). There is
+# no login, so do not publish them to other machines unless a reverse proxy in front
+# (Caddy/nginx/Traefik) authenticates users; then set PUBLIC_ORIGIN / TS_PUBLIC_ORIGIN in .env.
 name: agent-desk
 
 x-hardening: &hardening
@@ -36,10 +36,8 @@ services:
     image: teamsystem-mock:latest
     <<: *hardening
     environment:
-      DESK_ACCESS_TOKEN: ${DESK_ACCESS_TOKEN:?set DESK_ACCESS_TOKEN in .env (a long random string)}
       AGENT_DESK_URL: http://agent-desk:5173
       ALLOWED_ORIGINS: ${TS_PUBLIC_ORIGIN:-}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     volumes: ["ts-state:/state"]
     tmpfs: ["/tmp"]
     ports: ["127.0.0.1:5680:5680"]
@@ -55,12 +53,10 @@ services:
       - path: .env          # SMTP_*, IMAP_*, WHATSAPP_*, FIC_*, GEMINI_API_KEY ... (optional)
         required: false
     environment:
-      DESK_ACCESS_TOKEN: ${DESK_ACCESS_TOKEN:?set DESK_ACCESS_TOKEN in .env (a long random string)}
       TS_FIRM_URL: http://teamsystem:5680
       A2A_TRANSPORT: redis
       REDIS_URL: redis://redis:6379
       ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
       LOCAL_SLM_URL: ${LOCAL_SLM_URL:-http://ollama:11434/v1/chat/completions}
     volumes:
       - agent-data:/app/data

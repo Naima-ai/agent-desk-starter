@@ -30,21 +30,19 @@ Docker Desktop must be installed and **running** (its whale icon in the taskbar,
    ```bash
    cd "E:\Nova Work\Loop.ai\Accountant_agent\agent-desk-starter"
    ```
-2. **Create your settings file** and make a password for the system:
-   ```bash
-   copy .env.docker.example .env
-   ```
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-   ```
-   Open `.env`, paste that long text after `DESK_ACCESS_TOKEN=`, and save. This is the password you type to sign in. Everything else in the file is optional. Docker refuses to start while `DESK_ACCESS_TOKEN` is empty.
-3. **Start everything** (the first time it builds, which takes a few minutes):
+2. **Start everything** (the first time it builds, which takes a few minutes):
    ```bash
    docker compose up -d --build
    ```
-4. **Open it**:
-   - Agent Desk: http://localhost:5173 (type the token)
-   - TeamSystem: http://localhost:5680 (type the same token)
+3. **Open it**:
+   - Agent Desk: http://localhost:5173
+   - TeamSystem: http://localhost:5680
+
+   There is no sign-in. The two programs are only reachable from this computer.
+4. **Optional settings** (email, WhatsApp, API keys): copy the example file and fill in what you need, then run the start command again.
+   ```bash
+   copy .env.docker.example .env
+   ```
 
 Handy commands:
 
@@ -65,19 +63,19 @@ $env:Path += ";C:\Users\Testing\AppData\Local\Programs\DockerDesktop\resources\b
 
 ### Option B: straight from VS Code (no Docker)
 
-Two terminals. Use the **same** token in both.
+Two terminals. Start TeamSystem first.
 
-TeamSystem:
+Terminal 1, TeamSystem:
 ```bash
-cd "E:\Nova Work\Loop.ai\Accountant_agent\agent-desk-starter\teamsystem-firm-mock"; npm install; $env:DESK_ACCESS_TOKEN="your-long-random-string"; npm start
+cd "E:\Nova Work\Loop.ai\Accountant_agent\agent-desk-starter\teamsystem-firm-mock"; npm install; npm start
 ```
 
-Agent Desk:
+Terminal 2, Agent Desk:
 ```bash
-cd "E:\Nova Work\Loop.ai\Accountant_agent\agent-desk-starter\agent-desk-starter"; npm install; $env:DESK_ACCESS_TOKEN="your-long-random-string"; npm start
+cd "E:\Nova Work\Loop.ai\Accountant_agent\agent-desk-starter\agent-desk-starter"; npm install; npm start
 ```
 
-For local-only testing you can skip the token. Then there is no sign-in, and the programs only listen on your own computer.
+Open http://localhost:5173 and http://localhost:5680. There is no sign-in. To stop either one, press Ctrl+C in its terminal.
 
 ## The AI model (Qwen): two ways to run it
 

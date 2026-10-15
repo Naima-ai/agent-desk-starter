@@ -5,8 +5,6 @@ import { z } from "zod";
 import * as email from "./connectors/email.mjs";
 import * as teamSystem from "./connectors/teamSystem.mjs";
 
-export const PUBLIC_EMAIL_PATHS = ["/api/email/inbound"]; // has its own token check, see below
-
 const json = (res, status, body) => res.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(body));
 
 const SendSchema = z.object({

@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname, resolve, sep } from "node:path";
-import { createGuard, listenHost, readBodyLimited, serviceAuthHeaders } from "./security.mjs";
+import { createGuard, listenHost, readBodyLimited } from "./security.mjs";
 import { clients, getClient, getClientByEmail, listClients } from "./data/clients.mjs";
 import { toFatturaPaXml } from "./xmlGenerator.mjs";
 import { toRawJsonFeed, toRawCsv } from "./rawFeeds.mjs";
@@ -55,7 +55,7 @@ async function dispatchEmails(client, period, messages) {
     let delivery;
     try {
       const r = await fetch(`${AGENT_DESK_URL}/api/email/send`, {
-        method: "POST", headers: { "Content-Type": "application/json", ...serviceAuthHeaders() },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clientId: client.id, subject: m.subject, body: m.body }), signal: AbortSignal.timeout(10000),
       });
       const data = await r.json().catch(() => ({}));
@@ -172,7 +172,7 @@ async function handleRequest(req, res) {
     if (!client) { json(res, 404, { error: "no such client" }); return; }
     try {
       if (req.method === "GET") {
-        const r = await fetch(`${AGENT_DESK_URL}/api/email/messages?client=${encodeURIComponent(client.id)}`, { headers: serviceAuthHeaders(), signal: AbortSignal.timeout(5000) });
+        const r = await fetch(`${AGENT_DESK_URL}/api/email/messages?client=${encodeURIComponent(client.id)}`, { signal: AbortSignal.timeout(5000) });
         json(res, 200, { email: client.email, messages: r.ok ? await r.json() : [], unavailable: !r.ok });
         return;
       }
@@ -180,7 +180,7 @@ async function handleRequest(req, res) {
         const { subject, body: text } = JSON.parse((await readBody(req)) || "{}");
         if (!subject || !text) { json(res, 400, { error: "subject and body are required" }); return; }
         const r = await fetch(`${AGENT_DESK_URL}/api/email/send`, {
-          method: "POST", headers: { "Content-Type": "application/json", ...serviceAuthHeaders() },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ clientId: client.id, subject, body: text }), signal: AbortSignal.timeout(15000),
         });
         const data = await r.json().catch(() => ({}));
@@ -313,7 +313,7 @@ async function handleRequest(req, res) {
     else if (action === "revalidate") {
       // Hand the client back to Agent Desk to run validation again.
       try {
-        const r = await fetch(`${AGENT_DESK_URL}/api/run-demo?client=${encodeURIComponent(client.id)}`, { headers: serviceAuthHeaders(), signal: AbortSignal.timeout(3000) });
+        const r = await fetch(`${AGENT_DESK_URL}/api/run-demo?client=${encodeURIComponent(client.id)}`, { signal: AbortSignal.timeout(3000) });
         result = r.ok ? { ok: true, started: true } : { ok: false, status: 502, error: `Agent Desk answered ${r.status}` };
       } catch (e) { result = { ok: false, status: 502, error: `Agent Desk not reachable at ${AGENT_DESK_URL} (${e.message})` }; }
     } else { json(res, 404, { error: "unknown workflow action" }); return; }

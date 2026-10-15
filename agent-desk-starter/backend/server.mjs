@@ -12,7 +12,7 @@ import { compile, compileWithJobText } from "./compiler.mjs";
 import { getGatewayStatus } from "./modelGateway.mjs";
 import { createGuard, listenHost, readBodyLimited } from "./security.mjs";
 import { describeRequest, contactForRequest } from "./documentContact.mjs";
-import { handleEmailRoute, PUBLIC_EMAIL_PATHS } from "./emailRoutes.mjs";
+import { handleEmailRoute } from "./emailRoutes.mjs";
 import { startInboundPoller } from "./connectors/email.mjs";
 import { getClientMemory } from "./memory/clientMemory.mjs";
 import { runVatFilingPath } from "./scenario/vatFilingPath.mjs";
@@ -104,10 +104,9 @@ function operatorAuthorized(req) {
 }
 
 // Every request passes the security guard first (CORS allowlist, CSRF check,
-// optional login, hardening headers) — see security.mjs.
+// hardening headers) — see security.mjs.
 const { guard } = createGuard({
   port: PORT,
-  publicPaths: [...PUBLIC_EMAIL_PATHS],
   csp: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 });
 
