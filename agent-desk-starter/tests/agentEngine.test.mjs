@@ -7,7 +7,7 @@ import { ToolRegistry } from "../backend/runtime/toolRegistry.mjs";
 import { ApprovalStore } from "../backend/runtime/approvalStore.mjs";
 import { makeMessage } from "../contracts/a2aSchema.mjs";
 import { transmit } from "../backend/connectors/adePortal.mjs";
-import { resolveDocumentRequest } from "../backend/lAmministrativo.mjs";
+import { pendingCorrections, resolveCorrection, resolveDocumentRequest } from "../backend/lAmministrativo.mjs";
 
 function manifest(seat, tools = [], extra = {}) {
   return {
@@ -407,4 +407,32 @@ test("concurrent runs keep client and correlation contexts isolated", async () =
   assert.equal(a.artifacts[0].correlationId, "corr-a");
   assert.equal(b.artifacts[0].clientId, "client_b");
   assert.equal(b.artifacts[0].correlationId, "corr-b");
+});
+
+test("default runtime relays a correction_request to the owner, tracks it, and closes it with answer_with_evidence", async () => {
+  const result = await runAgent(request("l_amministrativo", "handle_correction", {
+    message: { ruleId: "VAT-7", message: "P.IVA of supplier Rossi looks invalid", period: "2099-Q2" },
+  }, { actor: "agent:lo_smistatore", correlationId: "runtime-correction-1" }));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.artifacts[0].askedOwner, true);
+  assert.ok(result.artifacts[0].correctionId);
+  assert.deepEqual(result.messages.map((message) => message.type), ["acknowledgment"]);
+  assert.ok(pendingCorrections.has(result.artifacts[0].correctionId));
+
+  const resolution = resolveCorrection(result.artifacts[0].correctionId, { answer: "Corrected P.IVA is 01234567890", confirmedBy: "owner" });
+  assert.ok(resolution);
+  assert.equal(resolution.a2a.type, "answer_with_evidence");
+  assert.equal(resolution.a2a.ref, result.artifacts[0].correctionId);
+  assert.equal(resolution.evidence.kind, "correction_answer");
+  assert.equal(pendingCorrections.has(result.artifacts[0].correctionId), false);
+  // Closing twice is a no-op, not a second message to the studio.
+  assert.equal(resolveCorrection(result.artifacts[0].correctionId, {}), null);
+});
+
+test("correction_request input rejects extra fields (no free-text smuggling)", async () => {
+  const result = await runAgent(request("l_amministrativo", "handle_correction", {
+    message: { ruleId: "VAT-7", message: "x", period: "2099-Q2", extra: "nope" },
+  }));
+  assert.notEqual(result.status, "completed");
 });

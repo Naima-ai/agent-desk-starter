@@ -58,7 +58,7 @@ If port 5173 or 5680 is "already in use", stop any copy you started from VS Code
 
 **"docker is not recognized"?** The terminal was opened before Docker was installed. Fully close VS Code (not just the terminal panel), open it again, and try again. To fix just the current terminal without restarting, paste this once, then retry:
 ```bash
-$env:Path += ";C:\Users\Testing\AppData\Local\Programs\DockerDesktop\resources\bin"
+$env:Path += ";$env:LOCALAPPDATA\Programs\DockerDesktop\resources\bin"
 ```
 
 ### Option B: straight from VS Code (no Docker)

@@ -58,6 +58,11 @@ export async function contactForRequest(requestId, rawInput) {
       result = await email.sendEmail({ clientId: request.clientId, to: input.to, subject: input.subject, text: input.body });
     } else {
       result = await wa.sendTemplate(input.to, input.template, input.vars);
+      // sendTemplate never throws (a failed live send comes back as ok:false), so
+      // check it here — otherwise a rejected template would be logged as "sent".
+      if (result.ok === false) throw new Error(result.error || `HTTP ${result.status}`);
+      // Lets whatsappInbound.mjs match the owner's reply back to this request.
+      if (result.id) (request.waMessageIds ||= []).push(result.id);
     }
   } catch (e) {
     return { status: 502, body: { error: `${input.channel} send failed: ${e.message}` } };

@@ -16,8 +16,28 @@ import * as La from "../lAmministrativo.mjs";
 import { publishA2A } from "../messaging/a2aBus.mjs";
 import { runAgent } from "../runtime/agentEngine.mjs";
 import { startDefaultA2AConsumers, waitForA2AOutcome } from "../runtime/a2aConsumers.mjs";
+import * as wa from "../connectors/whatsapp.mjs";
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// How long a run waits for the owner's real WhatsApp reply before carrying on
+// with the item still open. The request itself stays open afterwards: a later
+// reply (or "Mark received" in Approvals) still closes it, then re-run Validate.
+const OWNER_REPLY_TIMEOUT_MS = Number(process.env.WHATSAPP_REPLY_TIMEOUT_MS) || 5 * 60_000;
+
+// Resolves "resolved" when the document request closes — by a WhatsApp reply
+// (whatsappInbound.mjs) or the Approvals tab — or "timeout".
+export function waitForDocumentRequest(requestId, timeoutMs) {
+  if (!La.pendingDocumentRequests.has(requestId)) return Promise.resolve("resolved"); // closed before we started waiting
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { off(); resolve("timeout"); }, timeoutMs);
+    const off = La.onLadderEvent((e) => {
+      if (e.kind === "document_request" && e.event === "resolved" && e.requestId === requestId) {
+        clearTimeout(timer); off(); resolve("resolved");
+      }
+    });
+  });
+}
 async function a2a(input) {
   const message = makeMessage(input);
   await publishA2A(message, { publisher: message.from });
@@ -85,7 +105,14 @@ async function executeRun(clientId, run) {
   await wait(600);
 
   // 2 — L'Addetto IVA validates completeness, coherence, prior periods & VAT rules.
-  let received = [];
+  // An expected invoice counts as received when the period's batch already holds a
+  // line from that supplier — e.g. the owner's document, filed in TeamSystem on an
+  // earlier run. Starting from an empty list asked the owner again, every run, for
+  // an invoice TeamSystem already had.
+  const sameSupplier = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+  let received = (vatBatch.expected || [])
+    .filter((e) => vatBatch.lines.some((l) => sameSupplier(l.supplier, e.supplier)))
+    .map((e) => ({ supplier: e.supplier, period: e.period }));
   let { tail, anomalies } = validateBatch(vatBatch, { receivedDocs: received, priorPeriod, taxonomy: chartOfAccounts, vatGroup: master.vatGroup, formatAnomalies: vatBatch.formatAnomalies });
   const initialTail = tail.length, initialAnomalies = anomalies.length;
   run.record("validated", { tail: initialTail, anomalies: initialAnomalies, rules: anomalies.map((a) => a.ruleId) });
@@ -188,22 +215,64 @@ async function executeRun(clientId, run) {
 
     if (result.askedOwner) {
       feed("l_amministrativo", `Missing invoice not on file — asked the owner on WhatsApp (request ${result.requestId}).`);
-      await wait(1200);
-      // In the real flow this waits for the owner's WhatsApp reply or a later
-      // SDI-inbox poll. The demo simulates the reply arriving here, but goes
-      // through the two-phase resolution path: persist the outgoing event,
-      // then commit the local state/evidence change.
-      const sdiId = "IT" + Math.floor(Math.random() * 900 + 100);
-      const resolution = La.prepareDocumentRequestResolution(result.requestId, { foundVia: "owner_reply", sdiId });
-      if (resolution) {
-        await publishA2A(resolution.a2a, { publisher: resolution.a2a.from });
-        const resolved = resolution.commit();
-        publish("evidence", { record: resolved.evidence });
-        await a2a({ from: "lo_smistatore", to: "l_amministrativo", client: vatBatch.client, type: "acknowledgment", ref: sdiId });
+      const waStatus = wa.status();
+      const liveWhatsApp = waStatus.send.live && waStatus.receive.webhookEnabled;
+      let gotDocument = false;
+
+      if (liveWhatsApp) {
+        // Real two-way WhatsApp is configured: wait for the owner's actual reply
+        // (whatsappInbound.mjs closes the request when it arrives), or for a
+        // person to press "Mark received" in the Approvals tab.
+        publish("board", { step: "awaiting_owner", label: "Waiting for the owner's reply on WhatsApp" });
+        feed("l_amministrativo", `Waiting for the owner's WhatsApp reply (up to ${Math.round(OWNER_REPLY_TIMEOUT_MS / 60000)} min) — or press "Mark received" in Approvals.`);
+        const outcome = await waitForDocumentRequest(result.requestId, OWNER_REPLY_TIMEOUT_MS);
+        run.record("owner_reply", { requestId: result.requestId, outcome });
+        if (outcome === "resolved") {
+          // The truth is what TeamSystem now holds, not a made-up line: re-read the
+          // batch and take the line(s) the owner's document actually produced.
+          const supplier = an.expected.replace(/^invoice\s+/i, "").trim();
+          const fresh = await teamSystem.readVatBatch(clientId, period);
+          const known = new Set(vatBatch.lines.map((l) => l.id));
+          const newLines = fresh.lines.filter((l) => !known.has(l.id) && sameSupplier(l.supplier, supplier));
+          if (newLines.length) {
+            for (const line of newLines) {
+              // A freshly filed invoice arrives unclassified — classify it like any tail line.
+              const r = await classifyLine(line, vatBatch.client, chartOfAccounts);
+              if (!r.needsHuman) { line.account = r.account; line.confidence = r.confidence; }
+              vatBatch.lines.push(line);
+              run.record("document_line_added", { line: line.id, supplier: line.supplier, net: line.net, vat: line.vat, account: line.account });
+            }
+            received.push({ supplier, period: an.period });
+            feed("l_addetto_iva", `Invoice from ${supplier} read from the owner's document in TeamSystem: ${newLines.map((l) => `${l.id} (net €${l.net}, VAT €${l.vat}${l.account ? `, account ${l.account}` : ", needs a category"})`).join("; ")} — added to the batch.`, "good");
+          } else {
+            feed("l_addetto_iva", `The owner's document is filed in TeamSystem, but no ${supplier} invoice line could be read from it — a person needs to enter it in TeamSystem. Item stays open.`, "warn");
+          }
+        } else {
+          feed("l_amministrativo", `No reply from the owner yet — request ${result.requestId} stays open. Continuing with the invoice still missing; re-run Validate once it arrives.`, "warn");
+        }
+      } else {
+        // WhatsApp not configured (offline stub): simulate the owner's reply so the
+        // demo still runs end to end. Same two-phase path as a real resolution:
+        // persist the outgoing event, then commit the local state/evidence change.
+        await wait(1200);
+        const sdiId = "IT" + Math.floor(Math.random() * 900 + 100);
+        const resolution = La.prepareDocumentRequestResolution(result.requestId, { foundVia: "owner_reply", sdiId });
+        if (resolution) {
+          await publishA2A(resolution.a2a, { publisher: resolution.a2a.from });
+          const resolved = resolution.commit();
+          publish("evidence", { record: resolved.evidence });
+          await a2a({ from: "lo_smistatore", to: "l_amministrativo", client: vatBatch.client, type: "acknowledgment", ref: sdiId });
+        }
+        gotDocument = true;
       }
-      feed("l_addetto_iva", "Missing invoice received — re-inserted into the batch.", "good");
-      vatBatch.lines.push({ id: "L5", supplier: "Verdi Srl", desc: "Fornitura mensile", net: 600.0, vat: 132.0, account: "30.10", confidence: 0.95 });
-      received.push({ supplier: "Verdi Srl", period: an.period });
+
+      if (gotDocument) {
+        // Offline/simulated path only: no real document exists, so the demo inserts
+        // its fixture line. The live path above uses what TeamSystem actually holds.
+        feed("l_addetto_iva", "Missing invoice received (simulated) — re-inserted into the batch.", "good");
+        vatBatch.lines.push({ id: "L5", supplier: "Verdi Srl", desc: "Fornitura mensile", net: 600.0, vat: 132.0, account: "30.10", confidence: 0.95 });
+        received.push({ supplier: "Verdi Srl", period: an.period });
+      }
     } else if (result.found) {
       feed("l_addetto_iva", "L'Amministrativo found the invoice on the client's own systems — no need to ask the owner.", "good");
       vatBatch.lines.push({ id: "L5", supplier: "Verdi Srl", desc: "Fornitura mensile", net: 600.0, vat: 132.0, account: "30.10", confidence: 0.95 });

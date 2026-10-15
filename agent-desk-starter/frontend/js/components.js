@@ -53,14 +53,13 @@
       status.note && h("span", { style: { color: "#9A5B12", marginLeft: 8, fontSize: 12 } }, status.note));
   }
 
-  function ViewHeader({ title, description, live }) {
+  function ViewHeader({ title, live }) {
     return h("div", { className: "view-header" },
       h("div", { className: "view-header-row" },
         h("h1", null, title),
         h("div", { style: { display: "flex", alignItems: "center", gap: 16 } },
           h(GatewayStatusBadge, null),
-          h("span", { className: "conn-status" }, h(StatusDot, { live }), live ? "Live" : "Offline"))),
-      h("p", null, description));
+          h("span", { className: "conn-status" }, h(StatusDot, { live }), live ? "Live" : "Offline"))));
   }
 
   function EmptyState({ children }) { return h("div", { className: "empty-state" }, children); }
@@ -193,8 +192,7 @@
     };
 
     return h("div", { className: "panel stacked-panel" },
-      h("h3", { className: "panel-title" }, "Skill sandbox ", h("span", { className: "panel-subtitle" }, "the 7 skills, switched on per client")),
-      h("p", { className: "hint" }, "Each skill checks manifest.skills before doing anything. Switch one off below, then run it \u2014 it should come back skipped rather than running anyway."),
+      h("h3", { className: "panel-title" }, "Skill sandbox"),
       h("div", { className: "skill-toggle-grid" },
         SKILL_TEST_CONFIG.map((s) => h("label", { key: s.id, className: "checkbox-label" },
           h("input", { type: "checkbox", checked: enabled.includes(s.id), onChange: () => toggle(s.id) }),
@@ -227,9 +225,7 @@
     };
 
     return h("div", { className: "panel" },
-      h("h3", { className: "panel-title" }, "Test: deliver the monthly pack ",
-        h("span", { className: "panel-subtitle" }, "proactive \u2014 not triggered by a studio request")),
-      h("p", { className: "hint" }, "Calls the seat\u2019s own deliverMonthlyPack() directly, the same way a real schedule trigger would. Summarises whatever this client/period already has recorded \u2014 documents found, still-open requests, still-open questions \u2014 into a single pack_delivered message."),
+      h("h3", { className: "panel-title" }, "Test: deliver the monthly pack"),
       h("div", { className: "pack-tester-row" },
         h("label", { className: "field-label-inline" }, "Period",
           h("input", { className: "text-input", value: period, onChange: (e) => onPeriodChange(e.target.value) })),
@@ -277,7 +273,6 @@
             placeholder: "es. Recupera i documenti mancanti per il periodo; se non li trovi, chiedi al titolare su WhatsApp\u2026",
             value: jobText, onChange: (e) => setJobText(e.target.value),
           }),
-          h("p", { className: "hint" }, "Leave blank to compile the seat\u2019s real job description on file. The NL\u2192manifest step genuinely calls the model gateway (edge SLM \u2192 cloud fallback \u2192 a deterministic offline heuristic if neither is reachable, which is what runs without a local model server configured) \u2014 the manifest below reflects whichever of those actually answered."),
           h("button", { className: "btn-primary", onClick: compile, disabled: busy }, busy ? "Compiling\u2026" : "Compile")),
         h("div", { className: "panel" },
           error && h("div", { className: "error-banner" }, error),
@@ -293,8 +288,7 @@
       seat === "l_amministrativo" && h(React.Fragment, null,
         h("div", { className: "panel client-selector" },
           h("label", { className: "field-label-inline" }, "Testing as client",
-            h("input", { className: "text-input", value: packClientId, onChange: (e) => setPackClientId(e.target.value) })),
-          h("p", { className: "hint" }, "The live runtime, skill sandbox and pack-delivery tester below all act on this client id.")),
+            h("input", { className: "text-input", value: packClientId, onChange: (e) => setPackClientId(e.target.value) }))),
         h(LiveRuntimePanel, { clientId: packClientId }),
         h(SkillSandbox, { clientId: packClientId }),
         h(PackDeliveryTester, { clientId: packClientId, period: packPeriod, onPeriodChange: setPackPeriod })));
@@ -376,8 +370,7 @@
     return h("details", { className: "mem-section", open: defaultOpen || undefined },
       h("summary", { className: "mem-summary" },
         h("span", { className: "mem-summary-title" }, title),
-        h("span", { className: "mem-count" }, count)),
-      h("p", { className: "mem-desc" }, desc),
+        h("span", { className: `mem-count${count === 0 ? " empty" : ""}` }, count)),
       count === 0 ? h(EmptyState, null, "Nothing here yet.") : h("div", { className: "mem-body" }, children));
   }
 
@@ -433,8 +426,11 @@
       h("div", { className: "payload-line" },
         `${e.record.pack.docs.length} doc(s) \u00b7 ${e.record.pack.missing.length} missing \u00b7 ${e.record.pack.questions.length} open question(s)`));
 
-    const evidenceRow = (e, i) => h("div", { className: "ledger-row", key: i },
-      h("span", { className: "hash" }, `${e.record.id} \u00b7 ${e.record.hash}  `), JSON.stringify(e.record));
+    const evidenceRow = (e, i) => h("div", { className: `ledger-row ev-${String(e.record.kind || "other").replace(/[^a-z_]/g, "")}`, key: i },
+      h("div", { className: "ev-head" },
+        h("span", { className: "ev-kind" }, String(e.record.kind || "record").replace(/_/g, " ")),
+        h("span", { className: "hash" }, `${e.record.id} \u00b7 ${e.record.hash}`)),
+      h("pre", { className: "ev-json" }, JSON.stringify(e.record)));
 
     const routingRow = (e, i) => h("div", { className: "ledger-row", key: "rt" + i },
       e.kind === "routed_task"
@@ -622,7 +618,6 @@
         : docReqs.map((r) => h(DocRequestCard, { key: r.id, r, ladderDots, onReceived, onChanged: refresh })),
 
       h("h3", { className: "section-title" }, "Open questions to the studio"),
-      h("p", { className: "hint" }, "domande_allo_studio \u2014 questions this seat has sent that the studio hasn't answered yet. No ladder here; only gates and document requests get reminded/escalated."),
       questions.length === 0
         ? h(EmptyState, null, "No open questions right now.")
         : questions.map((q) => h("div", { className: "approval-card", key: q.id },
@@ -652,21 +647,45 @@
       memory.runs === 0
         ? h("p", { className: "hint" }, "No validation has run for this client yet. After the first run, every action taken is stored here and the next run starts from it.")
         : h("div", null,
-          h("p", { className: "hint" }, `${memory.runs} validation run(s) · ${memory.rules.length} supplier rule(s) learned${recurring.length ? ` · recurring problems: ${recurring.map(([r, n]) => `${r} (${n}x)`).join(", ")}` : ""}`),
+          h("div", { className: "cx-stats" },
+            h("div", { className: "cx-stat" }, h("b", null, memory.runs), "validation run(s)"),
+            h("div", { className: "cx-stat green" }, h("b", null, memory.rules.length), "supplier rule(s) learned"),
+            h("div", { className: `cx-stat ${recurring.length ? "orange" : "green"}` }, h("b", null, recurring.length), "recurring problem type(s)")),
+          recurring.length > 0 && h("div", { className: "cx-pills" },
+            recurring.map(([r, n]) => h("span", { className: "cx-pill", key: r }, `${r} \u00b7 ${n}x`))),
           h("div", { className: "field-label" }, "Progress per run (oldest to newest)"),
-          memory.trend.map((t, i) => h("div", { className: "feed-row", key: i },
-            h("span", { className: "agent-name" }, `Run ${memory.runs - memory.trend.length + i + 1}`),
-            h("span", { className: "text" }, `${t.period || "?"} · low-confidence lines ${t.tail ?? "?"} · problems ${t.anomalies ?? "?"} · open at the end ${t.openAfter ?? "?"} · ${t.status || "?"}`))),
+          memory.trend.map((t, i) => h("div", { className: "cx-run", key: i },
+            h("span", { className: "cx-run-name" }, `Run ${memory.runs - memory.trend.length + i + 1}`),
+            h("span", { className: "cx-badge blue" }, t.period || "?"),
+            h("span", { className: "cx-run-metrics" }, `low-confidence lines ${t.tail ?? "?"} \u00b7 problems ${t.anomalies ?? "?"} \u00b7 open at the end ${t.openAfter ?? "?"}`),
+            h("span", { className: `cx-badge ${/review|open|pending/i.test(t.status || "") ? "orange" : /ok|done|clean|submitted|complete/i.test(t.status || "") ? "green" : "grey"}` }, (t.status || "?").replace(/_/g, " ")))),
           memory.rules.length > 0 && h("div", null,
             h("div", { className: "field-label" }, "Learned supplier -> account rules (applied automatically next time)"),
             memory.rules.map((r) => h("div", { className: "feed-row", key: r.key },
               h("span", { className: "agent-name" }, r.supplier),
-              h("span", { className: "text" }, `account ${r.account} · ${r.status} · conf ${r.confidence}${r.confirmedBy ? ` · confirmed by ${r.confirmedBy}` : ""}`)))),
+              h("span", { className: "text" }, `account ${r.account} \u00b7 ${r.status} \u00b7 conf ${r.confidence}${r.confirmedBy ? ` \u00b7 confirmed by ${r.confirmedBy}` : ""}`)))),
           memory.lastRunActions.length > 0 && h("div", null,
             h("div", { className: "field-label" }, `Actions taken in the last run (${memory.lastRunActions.length})`),
-            memory.lastRunActions.map((a) => h("div", { className: "feed-row", key: a.id },
-              h("span", { className: "agent-name" }, a.action.replace(/_/g, " ")),
-              h("span", { className: "text" }, summariseAction(a)))))));
+            h("div", { className: "cx-timeline" },
+              memory.lastRunActions.map((a) => h("div", { className: `cx-event ${actionTone(a)}`, key: a.id },
+                h("span", { className: "cx-event-name" }, a.action.replace(/_/g, " ")),
+                h("span", { className: "cx-event-text" }, summariseAction(a))))))));
+  }
+
+  // Colour by what the action means: pulling/checking data (blue), learning/classifying
+  // (violet), something that needs attention (orange / red when blocking), completed handoff (green).
+  function actionTone(a) {
+    const d = a.detail || {};
+    switch (a.action) {
+      case "anomaly_flagged": return /block/i.test(d.severity || "") ? "red" : "orange";
+      case "missing_document_handled": return "orange";
+      case "run_failed": return "red";
+      case "classified": return d.needsHuman ? "orange" : "violet";
+      case "rule_learned": return "violet";
+      case "gate_decision": return d.approved ? "green" : "red";
+      case "submission_prepared": case "written_back": return "green";
+      default: return "blue";
+    }
   }
 
   function summariseAction(a) {
@@ -939,8 +958,6 @@
     if (!roster) return h(EmptyState, null, "Loading the roster…");
 
     return h("div", null,
-      h("p", { className: "hint" },
-        "Who Lo Smistatore actually routes messages to — real and editable, saved to disk, read fresh on every routed message (no restart needed). This is different from the “Roster” page, which lists the 7 AI seats — this is the staff directory route() reads competence, client ownership, and availability from."),
       h("div", { className: "panel stacked-panel" },
         h("h3", { className: "panel-title" }, editingId ? "Edit staff entry" : "Add staff entry"),
         h("div", { className: "pack-tester-row" },
@@ -970,9 +987,9 @@
             h("div", { style: { flex: 1, minWidth: 200 } },
               h("div", { style: { fontWeight: 600 } }, `${r.agent} · tier ${r.tier}${r.available ? "" : " — unavailable"}`),
               h("div", { className: "text" }, `Handles: ${r.competence.join(", ") || "(none)"} · Clients: ${r.clients.join(", ") || "(none)"}`)),
-            h("button", { className: "btn-secondary", onClick: () => toggleAvailable(r) }, r.available ? "Mark unavailable" : "Mark available"),
+            h("button", { className: "btn-secondary btn-warn", onClick: () => toggleAvailable(r) }, r.available ? "Mark unavailable" : "Mark available"),
             h("button", { className: "btn-secondary", onClick: () => startEdit(r) }, "Edit"),
-            h("button", { className: "btn-secondary", onClick: () => remove(r.id) }, "Remove")))));
+            h("button", { className: "btn-secondary btn-danger", onClick: () => remove(r.id) }, "Remove")))));
   }
 
   window.AgentDeskComponents = {

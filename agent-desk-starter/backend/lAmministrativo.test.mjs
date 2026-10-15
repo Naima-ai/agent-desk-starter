@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as La from "./lAmministrativo.mjs";
-import { pendingGates, pendingDocumentRequests, pendingQuestions } from "./lAmministrativo.mjs";
+import { pendingGates, pendingDocumentRequests, pendingQuestions, pendingCorrections, handleCorrectionRequest, resolveCorrection, deliverMonthlyPack } from "./lAmministrativo.mjs";
 
 const FULL_MANIFEST = {
   seat: "l_amministrativo",
@@ -229,4 +229,51 @@ test("the four hard blocks always refuse, unconditionally", () => {
   assert.throws(() => La.sendToAuthority(), /REFUSED.*send_to_authority/);
   assert.throws(() => La.giveTaxAdvice(), /REFUSED.*tax_advice/);
   assert.throws(() => La.contactStudioStaffDirectly(), /REFUSED.*contact_studio_staff/);
+});
+
+test("handleCorrectionRequest: relays to the owner, acknowledges, tracks, and the owner's answer becomes answer_with_evidence", async () => {
+  const manifest = { skills: [] }; // relaying a studio request is not one of the 7 switchable skills
+  const sent = [];
+  const runtime = {
+    sendOwner: async (template, vars) => { sent.push({ template, vars }); return { ok: true }; },
+    toStudio: (m) => m,
+    scheduleLadder: false,
+  };
+  const out = await handleCorrectionRequest(manifest, "client-corr", { ruleId: "VAT-3", message: "Rate 22% on exempt line", period: "2099-Q3" }, runtime);
+  assert.equal(out.askedOwner, true);
+  assert.equal(out.ack.type, "acknowledgment");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].template, "confirm_correction");
+  assert.deepEqual(sent[0].vars, { rule: "VAT-3", period: "2099-Q3", detail: "Rate 22% on exempt line" });
+  assert.equal(pendingCorrections.get(out.correctionId).status, "pending");
+
+  const res = resolveCorrection(out.correctionId, { answer: "Line 4 is exempt, art. 10", confirmedBy: "owner" });
+  assert.equal(res.a2a.type, "answer_with_evidence");
+  assert.equal(res.a2a.to, "lo_smistatore");
+  assert.equal(res.a2a.ref, out.correctionId);
+  assert.equal(res.evidence.kind, "correction_answer");
+  assert.equal(pendingCorrections.has(out.correctionId), false);
+  assert.equal(resolveCorrection(out.correctionId, {}), null);
+});
+
+test("handleCorrectionRequest: legacy path reminds, then escalates to the studio but never closes the correction", async () => {
+  const waTemplates = [];
+  const out = await handleCorrectionRequest({ skills: [] }, "client-corr2",
+    { ruleId: "VAT-9", message: "Missing evidence", period: "2099-Q4", ladder: { reminderDelaysMs: [10], escalateAfterMs: 40 } },
+    { sendOwner: async (t) => { waTemplates.push(t); }, toStudio: (m) => m });
+  await new Promise((r) => setTimeout(r, 120));
+  const c = pendingCorrections.get(out.correctionId);
+  assert.equal(c.status, "pending");
+  assert.equal(c.escalated, true);
+  assert.equal(c.escalation.type, "escalation_requested");
+  assert.ok(waTemplates.length >= 2); // initial ask + at least one reminder
+  resolveCorrection(out.correctionId, { answer: "ok" });
+});
+
+test("deliverMonthlyPack lists corrections still awaiting the owner", async () => {
+  const out = await handleCorrectionRequest({ skills: [] }, "client-corr3", { ruleId: "VAT-1", message: "x", period: "2099-Q5" },
+    { sendOwner: async () => {}, toStudio: (m) => m, scheduleLadder: false });
+  const pack = await deliverMonthlyPack("client-corr3", "2099-Q5");
+  assert.deepEqual(pack.pack.corrections.map((c) => c.ruleId), ["VAT-1"]);
+  resolveCorrection(out.correctionId, {});
 });

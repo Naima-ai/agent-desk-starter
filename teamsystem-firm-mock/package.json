@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node backend/server.mjs",
     "check": "node --check backend/server.mjs",
-    "test": "node --test tests/"
+    "test": "node --test"
   },
   "dependencies": {
     "@babel/standalone": "^7.29.9",
