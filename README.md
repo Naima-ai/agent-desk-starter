@@ -60,7 +60,7 @@ If port 5173 or 5680 is "already in use", stop any copy you started from VS Code
 
 **"docker is not recognized"?** The terminal was opened before Docker was installed. Fully close VS Code (not just the terminal panel), open it again, and try again. To fix just the current terminal without restarting, paste this once, then retry:
 ```bash
-$env:Path += ";C:\Users\Testing\AppData\Local\Programs\DockerDesktop\resources\bin"
+$env:Path += ";C\Programs\DockerDesktop\resources\bin"
 ```
 
 ### Option B: straight from VS Code (no Docker)
@@ -69,12 +69,12 @@ Two terminals. Use the **same** token in both.
 
 TeamSystem:
 ```bash
-cd "E:\Nova Work\Loop.ai\Accountant_agent\agent-desk-starter\teamsystem-firm-mock"; npm install; $env:DESK_ACCESS_TOKEN="your-long-random-string"; npm start
+cd "x\agent-desk-starter\teamsystem-firm-mock"; npm install; $env:DESK_ACCESS_TOKEN="your-long-random-string"; npm start
 ```
 
 Agent Desk:
 ```bash
-cd "E:\Nova Work\Loop.ai\Accountant_agent\agent-desk-starter\agent-desk-starter"; npm install; $env:DESK_ACCESS_TOKEN="your-long-random-string"; npm start
+cd "x\agent-desk-starter\agent-desk-starter"; npm install; $env:DESK_ACCESS_TOKEN="your-long-random-string"; npm start
 ```
 
 For local-only testing you can skip the token. Then there is no sign-in, and the programs only listen on your own computer.
