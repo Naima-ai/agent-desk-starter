@@ -28,7 +28,7 @@ Docker Desktop must be installed and **running** (its whale icon in the taskbar,
 
 1. **Open a terminal in the project folder**, the one that contains `docker-compose.yml`:
    ```bash
-   cd "E:\Nova Work\Loop.ai\Accountant_agent\agent-desk-starter"
+   cd "x\agent-desk-starter"
    ```
 2. **Create your settings file** and make a password for the system:
    ```bash
