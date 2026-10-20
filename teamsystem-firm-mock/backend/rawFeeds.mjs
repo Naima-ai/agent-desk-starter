@@ -29,6 +29,13 @@ export function toRawJsonFeed(client) {
   };
 }
 
+/** A feed cut off mid-transfer: valid JSON that stops partway through, so a parser throws.
+ *  Used for clients flagged `corruptFeed` (the FMT-01 test case). */
+export function toCorruptRawJsonFeed(client) {
+  const full = JSON.stringify(toRawJsonFeed(client));
+  return full.slice(0, Math.floor(full.length * 0.6));
+}
+
 export function toRawCsv(client) {
   const cols = ["id_riga", "fornitore", "descrizione", "imponibile", "iva", "conto", "affidabilita", "data_fattura"];
   const rows = client.lines.map((l) => [

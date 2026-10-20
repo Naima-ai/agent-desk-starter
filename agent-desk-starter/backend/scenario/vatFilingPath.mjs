@@ -115,6 +115,7 @@ async function executeRun(clientId, run) {
     .map((e) => ({ supplier: e.supplier, period: e.period }));
   let { tail, anomalies } = validateBatch(vatBatch, { receivedDocs: received, priorPeriod, taxonomy: chartOfAccounts, vatGroup: master.vatGroup, formatAnomalies: vatBatch.formatAnomalies });
   const initialTail = tail.length, initialAnomalies = anomalies.length;
+  let humanAsked = 0; // lines Il Classificatore could not settle itself and had to put to a human
   run.record("validated", { tail: initialTail, anomalies: initialAnomalies, rules: anomalies.map((a) => a.ruleId) });
   feed("l_addetto_iva", `Validated vs prior periods: ${tail.length} low-confidence line(s), ${anomalies.length} anomaly(ies).`,
        tail.length || anomalies.length ? "warn" : "good");
@@ -147,6 +148,7 @@ async function executeRun(clientId, run) {
 // (same mechanism as the invoice-approval gate below) — confirmed at the
 // gate -> rule saved, under whoever's name actually approved it.
     if (r.needsHuman) {
+      humanAsked += 1;
       publish("board", { step: "ask", label: `Line ${line.id}: low confidence — waiting for a human to confirm ${r.account}` });
       const ev = evidence.put({ kind: "tail_line", supplier: line.supplier, line: line.id, period });
       publish("evidence", { record: ev });
@@ -344,13 +346,13 @@ async function executeRun(clientId, run) {
     wb.deliveredToFirm ? "good" : "warn");
 
   const { profile } = clientMemory.finishRun(run, {
-    tail: initialTail, anomalies: initialAnomalies, openAfter: stillOpen, status: wbStatus, delivered: wb.deliveredToFirm,
+    tail: initialTail, humanAsked, anomalies: initialAnomalies, openAfter: stillOpen, status: wbStatus, delivered: wb.deliveredToFirm,
     anomalyRules: anomalies.map((a) => a.ruleId),
   });
   const before = prior.last;
   feed("l_archivista", before
-    ? `Cortex memory updated (run #${profile.runs}): low-confidence lines ${before.tail} -> ${initialTail}, problems ${before.anomalies} -> ${initialAnomalies}.`
-    : `Cortex memory updated (run #${profile.runs}): this client's baseline is ${initialTail} low-confidence line(s) and ${initialAnomalies} problem(s).`, "good");
+    ? `Cortex memory updated (run #${profile.runs}): low-confidence lines ${before.tail} -> ${initialTail}, asked a human ${before.humanAsked ?? "?"} -> ${humanAsked} time(s), problems ${before.anomalies} -> ${initialAnomalies}.`
+    : `Cortex memory updated (run #${profile.runs}): this client's baseline is ${initialTail} low-confidence line(s) (asked a human ${humanAsked} time(s)) and ${initialAnomalies} problem(s).`, "good");
 
   publish("board", { step: "done", label: "Pre-filing validation complete" });
   return { ok: true };

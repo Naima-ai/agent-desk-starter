@@ -234,7 +234,10 @@ test("every TeamSystem Firm mock client validates exactly as designed", async ()
       { taxonomy: c.chartOfAccounts, vatGroup: c.vatGroup, priorPeriod: c.priorLines ? { lines: c.priorLines } : null }
     );
     const isClean = anomalies.length === 0 && tail.length === 0;
-    if (cleanExpected.has(c.id)) {
+    if (c.corruptFeed) {
+      // FMT-01 client: the data is clean, the FILE is broken — that surfaces at ingestion, not in validateBatch
+      assert.ok(isClean, `${c.name} has clean data; its defect is the truncated feed`);
+    } else if (cleanExpected.has(c.id)) {
       assert.ok(isClean, `${c.name} was meant to be a clean positive case, but got: ${JSON.stringify(anomalies)}`);
     } else {
       assert.ok(!isClean, `${c.name} was meant to demonstrate "${c.edgeCase}", but validated clean`);

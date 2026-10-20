@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const dataDir = join(here, "..", "..", "data");
+const dataDir = process.env.AGENT_DESK_DATA_DIR || join(here, "..", "..", "data"); // AGENT_DESK_DATA_DIR lets tests and containers keep state elsewhere
 const file = join(dataDir, "knowledge.json");
 
 function load() {

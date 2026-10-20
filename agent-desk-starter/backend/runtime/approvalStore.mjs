@@ -182,7 +182,7 @@ export class ApprovalStore {
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const defaultApprovalStore = new ApprovalStore({
-  filePath: join(here, "..", "..", "data", "runtime-approvals.json"),
+  filePath: join(process.env.AGENT_DESK_DATA_DIR || join(here, "..", "..", "data"), "runtime-approvals.json"),
 });
 
 export { TERMINAL as TERMINAL_APPROVAL_STATUSES };

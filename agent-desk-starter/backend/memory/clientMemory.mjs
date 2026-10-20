@@ -55,7 +55,7 @@ export function finishRun(run, outcome) {
   for (const ruleId of outcome.anomalyRules || []) recurring[ruleId] = (recurring[ruleId] || 0) + 1;
   const entry = {
     runId: run.id, period: run.period, at: summary.at,
-    tail: outcome.tail ?? null, anomalies: outcome.anomalies ?? null, openAfter: outcome.openAfter ?? null,
+    tail: outcome.tail ?? null, humanAsked: outcome.humanAsked ?? null, anomalies: outcome.anomalies ?? null, openAfter: outcome.openAfter ?? null,
     status: outcome.failed ? "failed" : (outcome.status || null),
   };
   const next = {
@@ -79,6 +79,6 @@ export function getClientMemory(clientId) {
   const rules = knowledge.all()
     .filter((r) => r.scope === `client:${clientId}` && r.kind === "coa_mapping")
     .map((r) => ({ key: r.key, supplier: r.key.split(":coa:")[1] || r.key, account: r.value, status: r.status, confidence: r.confidence, confirmedBy: r.confirmedBy, version: r.version, lastVerified: r.lastVerified }));
-  const trend = profile.history.map((h) => ({ period: h.period, at: h.at, tail: h.tail, anomalies: h.anomalies, openAfter: h.openAfter, status: h.status }));
+  const trend = profile.history.map((h) => ({ period: h.period, at: h.at, tail: h.tail, humanAsked: h.humanAsked ?? null, anomalies: h.anomalies, openAfter: h.openAfter, status: h.status }));
   return { clientId, runs: profile.runs, recurring: profile.recurring, trend, rules, recentRuns: runs, lastRunActions: lastActions };
 }

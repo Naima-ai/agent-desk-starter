@@ -24,7 +24,7 @@ const BASE = process.env.WHATSAPP_GRAPH_BASE_URL || `https://graph.facebook.com/
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 
 const here = dirname(fileURLToPath(import.meta.url));
-const dataDir = join(here, "..", "..", "data");
+const dataDir = process.env.AGENT_DESK_DATA_DIR || join(here, "..", "..", "data"); // AGENT_DESK_DATA_DIR lets tests and containers keep state elsewhere
 const logFile = () => process.env.WHATSAPP_LOG_FILE || join(dataDir, "whatsapp.jsonl");
 
 export function status() {

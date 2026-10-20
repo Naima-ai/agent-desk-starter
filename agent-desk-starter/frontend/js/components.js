@@ -97,8 +97,8 @@
     return h(React.Fragment, null,
       h("aside", { className: `sidebar${collapsed ? " collapsed" : ""}` },
         h("div", { className: "brand" },
-          h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p"),
-          !collapsed && h("div", { className: "brand-sub" }, "Agent Desk")),
+          h("img", { className: "brand-logo", src: "assets/loop-ai-group.png", alt: "loop.ai Group" }),
+          !collapsed && h("div", { className: "brand-sub" })),
         h("nav", { className: "side-nav" },
           NAV.map((n) => h("button", {
             key: n.id, className: `nav-item${view === n.id ? " active" : ""}`, onClick: () => setView(n.id),
@@ -118,7 +118,7 @@
           !collapsed && h("span", null, "Collapse"))),
 
       h("header", { className: "mobile-header" },
-        h("div", { className: "brand-mark" }, "l", h("span", { className: "dot" }, "\u221E"), "p"),
+        h("img", { className: "brand-logo", src: "assets/loop-ai-group.png", alt: "loop.ai Group" }),
         h(GatewayStatusBadge, null)),
 
       h("nav", { className: "mobile-bottom-nav" },
@@ -657,7 +657,7 @@
           memory.trend.map((t, i) => h("div", { className: "cx-run", key: i },
             h("span", { className: "cx-run-name" }, `Run ${memory.runs - memory.trend.length + i + 1}`),
             h("span", { className: "cx-badge blue" }, t.period || "?"),
-            h("span", { className: "cx-run-metrics" }, `low-confidence lines ${t.tail ?? "?"} \u00b7 problems ${t.anomalies ?? "?"} \u00b7 open at the end ${t.openAfter ?? "?"}`),
+            h("span", { className: "cx-run-metrics" }, `low-confidence lines ${t.tail ?? "?"} \u00b7 asked a human ${t.humanAsked ?? "?"} \u00b7 problems ${t.anomalies ?? "?"} \u00b7 open at the end ${t.openAfter ?? "?"}`),
             h("span", { className: `cx-badge ${/review|open|pending/i.test(t.status || "") ? "orange" : /ok|done|clean|submitted|complete/i.test(t.status || "") ? "green" : "grey"}` }, (t.status || "?").replace(/_/g, " ")))),
           memory.rules.length > 0 && h("div", null,
             h("div", { className: "field-label" }, "Learned supplier -> account rules (applied automatically next time)"),

@@ -1,7 +1,7 @@
 // backend/server.mjs — TeamSystem Firm mock: the studio's own IT system,
 // standing in for the real TeamSystem/gestionale + Fatture in Cloud until a
 // real connector exists. Zero-framework HTTP, same style as agent-desk-starter.
-// Holds 11 clients' worth of VAT batches and serves them — plus a FatturaPA-
+// Holds 20 clients' worth of VAT batches and serves them — plus a FatturaPA-
 // shaped XML per invoice line — over a small HTTP API, and a browsing UI.
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -10,7 +10,7 @@ import { dirname, join, extname, resolve, sep } from "node:path";
 import { createGuard, listenHost, readBodyLimited } from "./security.mjs";
 import { clients, getClient, getClientByEmail, getClientByPhone, listClients } from "./data/clients.mjs";
 import { toFatturaPaXml } from "./xmlGenerator.mjs";
-import { toRawJsonFeed, toRawCsv } from "./rawFeeds.mjs";
+import { toRawJsonFeed, toRawCsv, toCorruptRawJsonFeed } from "./rawFeeds.mjs";
 import { editClient, editLine, getEditLog, revertEdits } from "./edits.mjs";
 import { periodStage, noteEdit, applyWriteBack, markDelivery, getWorkflow, getWriteBacks, completeTask, sign, transmit, fireDueReminders } from "./workflow.mjs";
 import { attachmentPath, createClient, addAccount, addDocumentFromXml, addDocumentsFromCsv, addAttachment } from "./adminActions.mjs";
@@ -243,6 +243,11 @@ async function handleRequest(req, res) {
       const xmls = client.lines.map((l) => toFatturaPaXml(client, l));
       res.writeHead(200, { "Content-Type": "application/xml; charset=utf-8" })
         .end(xmls.join("\n<!-- ===NEXT-DOCUMENT=== -->\n"));
+      return;
+    }
+    if (client.corruptFeed) {
+      // the FMT-01 test client: the file arrives truncated and cannot be parsed
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" }).end(toCorruptRawJsonFeed(client));
       return;
     }
     json(res, 200, toRawJsonFeed(client));

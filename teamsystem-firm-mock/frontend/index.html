@@ -39,6 +39,8 @@
   .form .err{color:#C0473C;font-size:12px;margin-top:6px}
   .section{border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin:12px 0;background:#FAFBFE}
   .section h4{margin:0 0 8px;font-size:13px}
+  /* must out-rank `.section label` (small grey text), which otherwise turns the button text grey on blue */
+  .section label.uploadbtn{color:#fff;font-size:13px;margin-top:4px}
   .uploadbtn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;background:var(--blue);color:#fff;border-radius:6px;font-weight:700;font-size:13px;cursor:pointer;margin-top:4px}
   .uploadbtn:hover{opacity:0.92}
   .uploadbtn.disabled{opacity:0.6;cursor:default}

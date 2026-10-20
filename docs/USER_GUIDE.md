@@ -295,6 +295,39 @@ Upload an XML invoice, a CSV file or a PDF. XML and CSV become invoice lines. A 
 
 ---
 
+# The 20 test clients
+
+TeamSystem comes with 20 clients. Each one is built to show **one** situation, so you can see exactly how the system reacts. Search for any of them in the Clients tab of Agent Desk and press Validate.
+
+| Client | What it shows | What you should see |
+|---|---|---|
+| Rossi Srl | The original mix: hotel at 22% instead of 10%, a supplier with an invalid VAT number, a missing invoice | 3 problems, client requests sent |
+| Verdi Costruzioni | Reverse charge (subcontracting) done correctly | Clean, goes straight to signature |
+| Bianchi Export | Export sale with no customs or transport proof | 1 problem (CON-02) |
+| Ferrari Forfettario | Flat-rate regime, done correctly | Clean |
+| Colombo Gruppo IVA | A VAT Group member invoiced with the group's tax code | 1 problem (SdI 00327) |
+| Russo Ritardatario | Supply date later than the invoice date | 1 minor problem (CST-07) |
+| Romano Duplicato | Two lines with the same line number | 1 problem (STR-02) |
+| Marino Incompleto | A mandatory date is missing | 1 problem (CON-01) |
+| Gallo Esente | Exempt operation (art. 10), done correctly | Clean |
+| Conti SplitPayment | Split payment without the required wording | 1 problem (CON-03) |
+| Azienda Generale | A full real 189-account chart of accounts | Clean (scale test) |
+| Bruni Aritmetica | VAT amount is not net x rate (215 instead of 220) | Only CST-02 |
+| Fontana Aliquota | An impossible VAT rate (21%) | SEM-02, plus CST-02 and CST-04 (one typo, three symptoms) |
+| Moretti Natura | 0% VAT with no Natura code, and a taxed line that has one | 2 findings of CST-03 |
+| Ricci Codici Natura | An invented Natura code (N9) and a bare N6 with no sub-code | 2 findings of SEM-01 |
+| Greco Tipo Documento | Document type TD99 does not exist | 1 problem (STR-01) |
+| Conte Variazione | A supplier jumps from 600 to 3,000 against last quarter | 1 problem (PRIOR-PERIOD) |
+| Barbieri Feed Corrotto | The data file arrives cut off and cannot be read | 1 blocking problem (FMT-01) |
+| Lombardi Apprendimento | **Learning**: five vaguely described lines | First run: a human is asked 5 times. Second run: asked 0 times, all five come from memory |
+| Esposito Misto | **Messy quarter**: six different problems at once plus an unclassified line | 6 problems, one review task, 6 client requests |
+
+**Try the learning client:** validate Lombardi Apprendimento, go to Approvals and approve the five requests, then validate it again. In the Memory panel tab you will see "asked a human 5" become "asked a human 0".
+
+Two notes:
+- A good local AI model may classify some of Lombardi's lines confidently on the first run, so fewer than five questions can appear. Without a model (the offline mode) all five are always asked.
+- Edits you make in TeamSystem change these clients. Use **Revert all edits** on a client to get its original test data back.
+
 # A full example: fixing Rossi Srl
 
 1. **Agent Desk → Clients**: search "rossi", open it, press **Validate**.

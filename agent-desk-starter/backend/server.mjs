@@ -77,7 +77,7 @@ setInterval(runConfidenceDecay, 24 * 60 * 60 * 1000);
 const here = dirname(fileURLToPath(import.meta.url));
 const pub = join(here, "..", "frontend");
 const PORT = process.env.PORT || 5173;
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml", ".jpg": "image/jpeg", ".webp": "image/webp" };
 
 const readBody = readBodyLimited; // hard size cap, see security.mjs
 

@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { beginRun, finishRun, priorContext, getClientMemory } from "../backend/memory/clientMemory.mjs";
+import { mkdtempSync as __mk } from "node:fs";
+import { tmpdir as __tmp } from "node:os";
+import { join as __join } from "node:path";
+process.env.AGENT_DESK_DATA_DIR = __mk(__join(__tmp(), "agentdesk-test-"));
+const { beginRun, finishRun, priorContext, getClientMemory } = await import("../backend/memory/clientMemory.mjs");
 
 const CLIENT = `mem_test_${Date.now()}`;
 

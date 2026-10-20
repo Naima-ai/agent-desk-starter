@@ -8,7 +8,7 @@ export class RoutingTaskStore {
   #known = null;
   #queue = Promise.resolve();
 
-  constructor(filePath = join(here, "..", "..", "data", "routing-tasks.jsonl")) {
+  constructor(filePath = join(process.env.AGENT_DESK_DATA_DIR || join(here, "..", "..", "data"), "routing-tasks.jsonl")) {
     this.filePath = filePath;
   }
 
